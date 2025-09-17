@@ -28,6 +28,8 @@ from typing import List, Optional, Tuple
 from urllib.parse import urljoin, urlparse, quote_plus
 from urllib.request import Request, urlopen
 import zipfile
+import threading
+import random
 
 
 UA = (
@@ -134,6 +136,36 @@ def fetch(url: str, *, referer: Optional[str] = None, retry: int = 3, sleep: flo
             continue
     assert last_err is not None
     raise last_err
+
+
+# -----------------------------
+# Polite rate limiting (for parallelism)
+# -----------------------------
+
+
+class RateLimiter:
+    def __init__(self, interval_sec: float, jitter: float = 0.0, *, time_fn=None, sleep_fn=None):
+        self.interval = max(0.0, float(interval_sec))
+        self.jitter = max(0.0, float(jitter))
+        import time as _time
+        self.time_fn = time_fn or _time.monotonic
+        self.sleep_fn = sleep_fn or _time.sleep
+        self._lock = threading.Lock()
+        self._next = self.time_fn()
+
+    def wait(self):
+        with self._lock:
+            now = self.time_fn()
+            delay = max(0.0, self._next - now)
+            if delay > 0:
+                self.sleep_fn(delay)
+                now = self.time_fn()
+            # next interval with jitter
+            factor = 1.0
+            if self.jitter > 0:
+                factor = random.uniform(1.0 - self.jitter, 1.0 + self.jitter)
+            self._next = max(now, self._next) + self.interval * factor
+
 
 
 # -----------------------------
@@ -1041,7 +1073,7 @@ def _split_chapters(chapters: List[Chapter], per_file: int) -> List[List[Chapter
     return chunks or [chapters]
 
 
-def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle: float = 0.8, limit: Optional[int] = None, *, cover_auto: bool = False):
+def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle: float = 0.8, limit: Optional[int] = None, *, cover_auto: bool = False, workers: int = 2, jitter: float = 0.3):
     if not re.search(r"https?://[\w.:-]+/book/\d+/?$", book_url):
         # Allow urls with trailing slash omitted
         book_url = re.sub(r"/+$", "", book_url)
@@ -1058,26 +1090,42 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
     import time as _time
     t0 = _time.time()
     done = 0
-    for i, item in enumerate(toc, 1):
-        if limit is not None and i > limit:
-            break
-        print(f"[ {i:03d}/{total:03d} ] id={item.id} …", end="", flush=True)
-        html_text = fetch(item.url, referer=book_url)
-        title = extract_title_from_page(html_text) or item.title
-        cp = ContentParser()
-        cp.feed(html_text)
+    print_lock = threading.Lock()
+    limiter = RateLimiter(throttle, jitter=jitter)
+
+    def worker(idx_item):
+        idx, it = idx_item
+        with print_lock:
+            print(f"[ {idx:03d}/{total:03d} ] id={it.id} …", end="", flush=True)
+        limiter.wait()
+        html_text = fetch(it.url, referer=book_url)
+        title = extract_title_from_page(html_text) or it.title
+        cp = ContentParser(); cp.feed(html_text)
         body_html = cp.get_content()
         if not body_html:
-            # Fallback: try to grab main content heuristically by removing side nav
             cleaned = re.sub(r"<div[^>]*class=\"s-nav\"[\s\S]*?</div>", "", html_text)
             m = re.search(r'<div[^>]*class="nass[^"]*"[^>]*>([\s\S]*?)</div>', cleaned)
             body_html = m.group(1) if m else ""
             body_html = html.unescape(body_html)
         xhtml = build_chapter_xhtml_min(title, body_html)
-        chapters.append(Chapter(id=item.id, order=item.order + 2, title=title, xhtml=xhtml))
-        done += 1
-        print(" ok")
-        time.sleep(throttle)
+        with print_lock:
+            print(" ok")
+        return Chapter(id=it.id, order=it.order + 2, title=title, xhtml=xhtml)
+
+    items = list(enumerate(toc[:total], start=1))
+    if workers <= 1:
+        for idx_item in items:
+            ch = worker(idx_item)
+            chapters.append(ch)
+            done += 1
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            futs = {ex.submit(worker, idx_item): idx_item for idx_item in items}
+            for fut in as_completed(futs):
+                ch = fut.result()
+                chapters.append(ch)
+                done += 1
 
     # Output path (default: book title)
     if not out_path:
@@ -1334,6 +1382,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     group = ap.add_mutually_exclusive_group()
     group.add_argument("--cover-auto", action="store_true", help="Fetch Google Images result as cover (best-effort)")
     group.add_argument("--cover", help="Path to local cover image (jpg/png)")
+    ap.add_argument("--workers", type=int, default=2, help="Parallel workers (polite): 1–4 recommended")
+    ap.add_argument("--jitter", type=float, default=0.3, help="Throttle jitter fraction (0..1)")
     args = ap.parse_args(argv)
 
     try:
@@ -1404,7 +1454,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("[✓] Done.")
             return 0
 
-        scrape_book_to_epub(args.url, args.output, throttle=args.throttle, limit=args.limit, cover_auto=bool(args.cover_auto))
+        scrape_book_to_epub(
+            args.url,
+            args.output,
+            throttle=args.throttle,
+            limit=args.limit,
+            cover_auto=bool(args.cover_auto),
+            workers=max(1, args.workers),
+            jitter=max(0.0, min(1.0, args.jitter)),
+        )
         return 0
     except Exception as e:  # noqa: BLE001
         print(f"[!] Error: {e}", file=sys.stderr)
