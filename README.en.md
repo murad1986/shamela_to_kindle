@@ -1,13 +1,13 @@
 shamela_books — Shamela.ws to EPUB (RTL)
 
-Minimal, Kindle‑friendly EPUB3 builder for books from `shamela.ws`. Focus: clean Arabic text (RTL), simple structure, and Send‑to‑Kindle compatibility.
+Minimal, Kindle‑friendly EPUB builder for books from `shamela.ws`. Focus: clean Arabic text (RTL), simple structure, and Send‑to‑Kindle compatibility.
 
 ## Repository Layout
 - `scripts/shamela_to_epub.py`: main script (no external deps).
 - `output/`: generated files (ignored by git).
 
 ## Supported Format (one profile)
-- EPUB3, minimal profile:
+- EPUB, minimal profile:
   - No embedded fonts.
   - No cover or “بطاقة الكتاب” info page.
   - `nav.xhtml` present in manifest, not added to spine.
@@ -29,11 +29,12 @@ Minimal, Kindle‑friendly EPUB3 builder for books from `shamela.ws`. Focus: cle
 - `--cover path/to.jpg|png`: provide a local cover (recommended ≥ 300×300).
 
 ## What Works / What Doesn’t
-- Works reliably: Minimal EPUB3 (above) — passes Send‑to‑Kindle for this book.
+- Works reliably: Minimal EPUB (above) — passes Send‑to‑Kindle for this book.
 - Not reliable for Send‑to‑Kindle (kept out by design):
-  - EPUB3 with embedded fonts and/or extra pages (cover/info) — often e999.
-  - EPUB2 (OPF 2.0 + NCX) — inconsistent, e999.
-  - DOCX — not accepted in our tests for this title.
+  - EPUB with embedded fonts and/or extra pages (cover/info) — often e999.
+  - Legacy profiles (NCX/complex metadata) — inconsistent.
+
+More details about the profile and cover logic: see TECHNICAL.md.
 
 ## Notes
 - Respect the website. Throttle requests and avoid parallel scraping.
