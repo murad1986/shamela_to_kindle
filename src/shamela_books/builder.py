@@ -17,7 +17,7 @@ def build_chapter_xhtml_min(title: str, body_html: str, lang: str = "ar") -> str
     title_xml = xsu.escape(title)
     return (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
         "<head>\n"
         "  <meta charset=\"utf-8\"/>\n"
         "  <title>%s</title>\n"
@@ -231,7 +231,7 @@ def write_epub3(
         ol = "\n".join(items_xml)
         end_xhtml = (
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-            "<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
             "<head>\n"
             "  <meta charset=\"utf-8\"/>\n"
             "  <title>%s</title>\n"
@@ -249,7 +249,7 @@ def write_epub3(
 
     nav_xhtml = (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
         "<head><meta charset=\"utf-8\"/><title>الفهرس</title>\n"
         "<link rel=\"stylesheet\" type=\"text/css\" href=\"css/style.css\"/></head>\n"
         "<body><nav epub:type=\"toc\"><h2>الفهرس</h2><ol>\n%s\n"
