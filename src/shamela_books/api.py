@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 
 from .http import fetch, RateLimiter
 from .models import BookMeta, Chapter
-from .parsers import parse_book_meta, parse_toc, ContentParser
+from .parsers import parse_book_meta, parse_toc, ContentParser, sanitize_fragment_allowlist
 from .parsers import extract_book_id  # re-exported helper
 from .exceptions import ShamelaError, CoverError
 from .utils import norm_ar_text
