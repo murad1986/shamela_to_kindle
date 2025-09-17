@@ -1,5 +1,5 @@
 from pathlib import Path
-from scripts.shamela_to_epub import parse_toc
+from shamela_books import parse_toc
 
 
 def test_parse_toc_order_and_unique():

@@ -1,5 +1,5 @@
 from pathlib import Path
-from scripts.shamela_to_epub import ContentParser
+from shamela_books import ContentParser
 
 
 def test_content_clean_icons_and_buttons_removed_keep_sup_and_anchors():

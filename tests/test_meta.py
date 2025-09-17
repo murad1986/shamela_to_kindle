@@ -1,5 +1,5 @@
 from pathlib import Path
-from scripts.shamela_to_epub import parse_book_meta, strip_book_prefix
+from shamela_books import parse_book_meta, strip_book_prefix
 
 
 def test_parse_book_meta_clean_title_author():

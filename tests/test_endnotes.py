@@ -1,5 +1,5 @@
 from pathlib import Path
-from scripts.shamela_to_epub import extract_endnotes, link_endnote_refs, build_endnotes_xhtml
+from shamela_books import extract_endnotes, link_endnote_refs, build_endnotes_xhtml
 
 
 def test_extract_endnotes_from_hamesh():
@@ -14,8 +14,8 @@ def test_extract_endnotes_from_hamesh():
 def test_link_endnote_refs():
     html = "<p>نص (١) و(٢).</p>"
     linked = link_endnote_refs(html, {'1': 1, '2': 2})
-    assert 'href="#note-1"' in linked and 'id="ref-1"' in linked
-    assert 'href="#note-2"' in linked and 'id="ref-2"' in linked
+    assert 'href="endnotes.xhtml#note-1"' in linked and 'id="ref-1"' in linked
+    assert 'href="endnotes.xhtml#note-2"' in linked and 'id="ref-2"' in linked
 
 
 def test_build_endnotes_xhtml():

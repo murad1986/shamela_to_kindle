@@ -5,7 +5,7 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 Проект для выгрузки книг с сайта `shamela.ws` и сборки из них файлов EPUB с корректной поддержкой арабского письма (RTL) и удобной навигацией.
 
 ## TL;DR
- - Базово (с автопоиском обложки): `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
+ - Базово (с автопоиском обложки): `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
  - Отключить автопоиск обложки: исключите `--cover-auto` (по умолчанию авто включён)
  - Свой файл обложки: `--cover path/to.jpg|png`
 - Результат: `output/<Название книги> - <Издатель>.epub`
@@ -16,19 +16,36 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 - Запуск CLI: `shamela-to-epub 'https://shamela.ws/book/158' --throttle 0.6`
 
 ## Структура
-- `scripts/shamela_to_epub.py` — основной скрипт (без внешних зависимостей).
+- `src/shamela_books/` — библиотека (парсеры, сборщик EPUB, CLI).
+- `scripts/` — совместимость/обёртки (устаревает).
 - `output/` — готовые файлы (EPUB).
 
 ## Быстрый старт
-- Python 3.11+: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
-- С обложкой (Google Images): добавьте `--cover-auto`
+- Python 3.11+: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
+- Через CLI: `shamela-to-epub 'https://shamela.ws/book/158' --throttle 0.6`
+- С обложкой: `--cover-auto` или `--cover path/to.jpg|png`
 - Результат: `output/<Название книги> - <Издатель>.epub`.
+
+## Использование как модуль
+```python
+from shamela_books import build_epub_from_url
+
+out = build_epub_from_url(
+    'https://shamela.ws/book/158',
+    throttle=0.8,
+    cover_auto=True,
+    cover_query='...',
+    cover_min_size=(600, 800),
+)
+print('EPUB at', out)
+```
 
 ## Поддерживаемый формат (один, «рабочий»)
 - EPUB (минимальный профиль, оптимален для Send‑to‑Kindle):
   - Без обложки и страницы «بطاقة الكتاب».
   - Без встроенных шрифтов.
   - `nav.xhtml` присутствует в манифесте, но не включён в `spine`.
+  - Сноски: глобальная нумерация по всей книге; ссылки в тексте → `endnotes.xhtml#note-<G>`; в конце ↩︎ ведёт обратно в исходную главу `#ref-<G>`. Для Kindle исключено дублирование номера (номер списка `<ol>` используется как основной; явный префикс в тексте элемента не добавляется).
 
 ## Ключевые опции
 - `-o, --output` — путь к выходному файлу (по умолчанию берётся из названия книги + издатель).
@@ -52,6 +69,11 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
   - `--cover-auto` — автопоиск обложки (Google Images). Логика и фильтры описаны в TECHNICAL.md.
   - `--cover path/to.jpg|png` — вручную задать файл обложки (рекомендуется ≥ 300×300).
 
+## Сноски (الهوامش)
+- В тексте: отображаются глобальные номера `1..N` (латинские цифры), кликабельные на конец книги.
+- В конце: сформирован `endnotes.xhtml` со списком `<ol>`; удаляются повторные ведущие числа из исходного текста.
+- Обратная ссылка ↩︎ возвращает к месту в конкретной главе.
+
 ## Что не работало и что работает
 - Работает стабильно: минимальный EPUB — без шрифтов, без обложки/«بطاقة الكتاب», `nav.xhtml` не в `spine`.
 - Не работало (через Send‑to‑Kindle для этой книги):
@@ -61,4 +83,4 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 Подробнее о профиле и обложке: см. TECHNICAL.md.
 
 ## Пример
-- `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
+- `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`

@@ -3,12 +3,12 @@ shamela_books — تحويل كتب الشاملة إلى EPUB (اتجاه RTL)
 أداة خفيفة لبناء ملفات EPUB متوافقة مع Kindle من موقع `shamela.ws`، مع الحفاظ على النص العربي واتجاه القراءة من اليمين إلى اليسار وبنية بسيطة.
 
 ## خلاصة سريعة (TL;DR)
-- الأساس: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
+- الأساس: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
 - مع غلاف: أضف `--cover-auto` (أو `--cover path/to.jpg|png`)
 - الناتج: `output/<العنوان> - <الناشر>.epub`
 
 ## بنية المستودع
-- `scripts/shamela_to_epub.py`: السكربت الرئيسي (بدون اعتماديات خارجية).
+- `src/shamela_books/`: مكتبة (محللات، مُنشئ EPUB، CLI).
 - `output/`: المخرجات (غير متتبَّعة في git).
 
 ## التنسيق المدعوم (واحد فقط)
@@ -19,8 +19,8 @@ shamela_books — تحويل كتب الشاملة إلى EPUB (اتجاه RTL)
   - فصول XHTML نظيفة مع CSS خارجي واتجاه RTL.
 
 ## طريقة الاستخدام
-- تنزيل كتاب كامل: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
-- مع غلاف (بحث Google Images): أضف `--cover-auto`
+- تنزيل كتاب كامل: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
+- مع غلاف: `--cover-auto` أو `--cover path/to.jpg|png`
 - تجربة سريعة (أول N فصل): `--limit N`
 - اسم الملف الناتج: `<العنوان> - <الناشر>.epub`
   - نحافظ على الحروف العربية والمسافات (بدون شرطات سفلية).

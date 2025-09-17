@@ -1,4 +1,4 @@
-from scripts.shamela_to_epub import RateLimiter
+from shamela_books import RateLimiter
 
 
 class FakeClock:

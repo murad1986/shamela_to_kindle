@@ -1,4 +1,4 @@
-from scripts.shamela_to_epub import _parse_min_size, _maybe_convert_png_to_jpeg
+from shamela_books import _parse_min_size, _maybe_convert_png_to_jpeg
 
 
 def test_parse_min_size():

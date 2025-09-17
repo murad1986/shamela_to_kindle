@@ -3,12 +3,13 @@ shamela_books — Shamela.ws to EPUB (RTL)
 Minimal, Kindle‑friendly EPUB builder for books from `shamela.ws`. Focus: clean Arabic text (RTL), simple structure, and Send‑to‑Kindle compatibility.
 
 ## TL;DR
-- Basic: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
+- Basic: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
 - With cover: add `--cover-auto` (or `--cover path/to.jpg|png`)
 - Output: `output/<Title> - <Publisher>.epub`
 
 ## Repository Layout
-- `scripts/shamela_to_epub.py`: main script (no external deps).
+- `src/shamela_books/`: library modules (parsers, builder, CLI).
+- `scripts/`: compatibility wrappers (legacy).
 - `output/`: generated files (ignored by git).
 
 ## Supported Format (one profile)
@@ -19,8 +20,8 @@ Minimal, Kindle‑friendly EPUB builder for books from `shamela.ws`. Focus: clea
   - Clean RTL XHTML chapters with external CSS only.
 
 ## Usage
-- Full book: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
-- With cover (Google Images): add `--cover-auto`
+- Full book: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
+- With cover (Google Images): add `--cover-auto` or `--cover path/to.jpg|png`
 - Quick test (first N chapters): `--limit N`
 - Output file name: `<Title> - <Publisher>.epub`
   - Arabic preserved, spaces intact, no underscores.
@@ -50,6 +51,20 @@ Minimal, Kindle‑friendly EPUB builder for books from `shamela.ws`. Focus: clea
   - Legacy profiles (NCX/complex metadata) — inconsistent.
 
 More details about the profile and cover logic: see TECHNICAL.md.
+
+## As a Library
+```python
+from shamela_books import build_epub_from_url
+
+out = build_epub_from_url(
+    'https://shamela.ws/book/158',
+    throttle=0.8,
+    cover_auto=True,
+    cover_query='...',
+    cover_min_size=(600, 800),
+)
+print('EPUB at', out)
+```
 
 ## Notes
 - Respect the website. Throttle requests and avoid parallel scraping.
