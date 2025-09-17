@@ -4,6 +4,11 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 
 Проект для выгрузки книг с сайта `shamela.ws` и сборки из них файлов EPUB с корректной поддержкой арабского письма (RTL) и удобной навигацией.
 
+## TL;DR
+- Базово: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
+- С обложкой: `... --cover-auto` (или `--cover path/to.jpg|png`)
+- Результат: `output/<Название книги> - <Издатель>.epub`
+
 ## Структура
 - `scripts/shamela_to_epub.py` — основной скрипт (без внешних зависимостей).
 - `output/` — готовые файлы (EPUB).

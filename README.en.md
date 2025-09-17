@@ -2,6 +2,11 @@ shamela_books — Shamela.ws to EPUB (RTL)
 
 Minimal, Kindle‑friendly EPUB builder for books from `shamela.ws`. Focus: clean Arabic text (RTL), simple structure, and Send‑to‑Kindle compatibility.
 
+## TL;DR
+- Basic: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
+- With cover: add `--cover-auto` (or `--cover path/to.jpg|png`)
+- Output: `output/<Title> - <Publisher>.epub`
+
 ## Repository Layout
 - `scripts/shamela_to_epub.py`: main script (no external deps).
 - `output/`: generated files (ignored by git).
