@@ -9,8 +9,8 @@ Minimal, Kindle‑friendly EPUB builder for books from `shamela.ws`. Focus: clea
 
 ## Repository Layout
 - `src/shamela_books/`: library modules (parsers, builder, CLI).
-- `scripts/`: compatibility wrappers (legacy).
 - `output/`: generated files (ignored by git).
+- `docs/`: detailed docs (usage, endnotes, Apple Books, development).
 
 ## Supported Format (one profile)
 - EPUB, minimal profile:
@@ -70,3 +70,10 @@ print('EPUB at', out)
 - Respect the website. Throttle requests and avoid parallel scraping.
 - Resulting chapters are right‑to‑left; rendering depends on your reader.
 - If Kindle still rejects, try USB copy to device (no server conversion).
+
+## Docs
+- Usage: `docs/USAGE.en.md`
+- Endnotes: `docs/ENDNOTES.en.md`
+- Apple Books: `docs/APPLE_BOOKS.en.md`
+- Development: `docs/DEVELOPMENT.en.md`
+- Troubleshooting: `docs/TROUBLESHOOTING.en.md`

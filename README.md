@@ -27,11 +27,11 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 - Результат: `output/<Название книги> - <Издатель>.epub`.
 
 ## Документация
-- Руководство по использованию: `docs/USAGE.ru.md`
-- Сноски: дизайн и реализация: `docs/ENDNOTES.ru.md`
-- Совместимость с Apple Books: `docs/APPLE_BOOKS.ru.md`
-- Разработка/контрибуции: `docs/DEVELOPMENT.ru.md`
-- Диагностика и FAQ: `docs/TROUBLESHOOTING.ru.md`
+- Руководство по использованию (RU/EN): `docs/USAGE.ru.md`, `docs/USAGE.en.md`
+- Сноски: дизайн и реализация (RU/EN): `docs/ENDNOTES.ru.md`, `docs/ENDNOTES.en.md`
+- Совместимость с Apple Books (RU/EN): `docs/APPLE_BOOKS.ru.md`, `docs/APPLE_BOOKS.en.md`
+- Разработка/контрибуции (RU/EN): `docs/DEVELOPMENT.ru.md`, `docs/DEVELOPMENT.en.md`
+- Диагностика и FAQ (RU/EN): `docs/TROUBLESHOOTING.ru.md`, `docs/TROUBLESHOOTING.en.md`
 
 ## Использование как модуль
 ```python
