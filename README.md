@@ -9,6 +9,11 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 - С обложкой: `... --cover-auto` (или `--cover path/to.jpg|png`)
 - Результат: `output/<Название книги> - <Издатель>.epub`
 
+## Установка (опционально)
+- Локально: `pip install -e .`
+- Через pipx: `pipx install .`
+- Запуск CLI: `shamela-to-epub 'https://shamela.ws/book/158' --throttle 0.6`
+
 ## Структура
 - `scripts/shamela_to_epub.py` — основной скрипт (без внешних зависимостей).
 - `output/` — готовые файлы (EPUB).
