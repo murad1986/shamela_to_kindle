@@ -274,6 +274,7 @@ class ContentParser(HTMLParser):
         self.best_html = ""
         self.best_len = 0
         self.tmp_buf = io.StringIO()
+        self.skip_depth = 0
 
     def handle_starttag(self, tag, attrs):
         attrs_d = dict(attrs)
@@ -291,7 +292,16 @@ class ContentParser(HTMLParser):
 
         if self.capture:
             # Allow basic tags; convert relative links to text
-            if tag in {"p", "br", "span", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub"}:
+            # Skip UI cruft: buttons/icons (fa), while keeping anchors/ids
+            cls = attrs_d.get("class", "")
+            classes = set(cls.split()) if isinstance(cls, str) else set()
+            is_icon = any(c.startswith("fa") for c in classes) or tag in {"i"}
+            is_button = tag == "button" or any(c.startswith("btn") for c in classes)
+            if self.skip_depth > 0 or is_icon or is_button:
+                self.skip_depth += 1
+                return
+            allowed = {"p", "br", "span", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub", "a"}
+            if tag in allowed:
                 attrs_str = "".join(
                     f" {k}={xsu.quoteattr(v)}" for k, v in attrs if k in {"id", "class"}
                 )
@@ -302,7 +312,10 @@ class ContentParser(HTMLParser):
             return
 
         if self.capture:
-            if tag in {"p", "span", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub"}:
+            if self.skip_depth > 0:
+                self.skip_depth -= 1
+                return
+            if tag in {"p", "span", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub", "a"}:
                 self.tmp_buf.write(f"</{tag}>")
 
             self.depth_capture -= 1
@@ -318,7 +331,7 @@ class ContentParser(HTMLParser):
             self.stack.pop()
 
     def handle_data(self, data):
-        if self.capture:
+        if self.capture and self.skip_depth == 0:
             self.tmp_buf.write(xsu.escape(data))
 
     def get_content(self) -> str:
@@ -640,6 +653,9 @@ def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_
         dc_creator = f"<dc:creator>{xsu.escape(meta.author)}</dc:creator>" if meta.author else ""
         dc_title = xsu.escape(meta.book_title or meta.title)
 
+    # Optional extra meta for Kindle (EPUB2-style cover hint)
+    meta_cover_hint = "    <meta name=\"cover\" content=\"cover-image\"/>\n" if cover_asset else ""
+
     content_opf = (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"book-id\" xml:lang=\"%s\">\n"
@@ -649,6 +665,7 @@ def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_
         "    <dc:language>%s</dc:language>\n"
         f"    {dc_publisher}"
         f"    {dc_creator}\n"
+        f"{meta_cover_hint}"
         "    <meta property=\"dcterms:modified\">%s</meta>\n"
         "  </metadata>\n"
         "  <manifest>\n"
@@ -1077,11 +1094,15 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
                 if not got:
                     continue
                 data, ctype = got
+                # Accept only JPEG/PNG
+                if ctype not in ("image/jpeg", "image/jpg", "image/png"):
+                    continue
                 size = _image_size(data)
                 if not size:
                     continue
                 w, h = size
-                if min(w, h) < 300:
+                # Heuristics: require reasonable dimensions and size
+                if min(w, h) < 300 or len(data) < 50 * 1024:
                     continue
                 ext = 'png' if ('png' in ctype or cand.lower().endswith('.png')) else 'jpg'
                 cover_name = f"cover.{ext}"
