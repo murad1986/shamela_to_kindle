@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+
+# Local caches and artifacts
+.cache/
+.cache_book_*.html
+
+# Outputs
+output/
+
+# Editors/IDE
+.vscode/
+.idea/
