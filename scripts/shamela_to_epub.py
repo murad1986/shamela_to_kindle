@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import List, Optional, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, quote_plus
 from urllib.request import Request, urlopen
 import zipfile
 
@@ -509,7 +509,7 @@ def _font_mime(path: str) -> str:
     }.get(ext, 'application/octet-stream')
 
 
-def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_files: Optional[List[str]] = None, minimal_profile: bool = False):
+def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_files: Optional[List[str]] = None, minimal_profile: bool = False, cover_asset: Optional[Tuple[str, bytes, str]] = None):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     book_id = meta.identifier
@@ -621,6 +621,14 @@ def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_
             f"    <item id=\"font_{xsu.escape(base)}\" href=\"fonts/{xsu.escape(base)}\" media-type=\"{xsu.escape(_mime)}\"/>"
         )
 
+    # Cover item in manifest (EPUB3 way)
+    cover_manifest_xml = []
+    if cover_asset:
+        cover_name, _cover_bytes, cover_mime = cover_asset
+        cover_manifest_xml.append(
+            f"    <item id=\"cover-image\" href=\"images/{xsu.escape(cover_name)}\" media-type=\"{xsu.escape(cover_mime)}\" properties=\"cover-image\"/>"
+        )
+
     # Optional extra metadata (hardened for minimal profile)
     if minimal_profile:
         dc_publisher = ""  # omit to avoid parser quirks
@@ -648,6 +656,7 @@ def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_
         "    <item id=\"css\" href=\"css/style.css\" media-type=\"text/css\"/>\n"
         "%s\n"
         "%s\n"
+        "%s\n"
         "  </manifest>\n"
         "  <spine page-progression-direction=\"rtl\">\n"
         "%s\n"
@@ -660,6 +669,7 @@ def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_
         xsu.escape(meta.language),
         now,
         "\n".join(font_manifest_xml),
+        "\n".join(cover_manifest_xml),
         "\n".join(manifest_items),
         "\n".join(spine_items),
     )
@@ -683,6 +693,97 @@ def write_epub3(meta: BookMeta, chapters: List[Chapter], out_path: str, *, font_
         # fonts
         for base, data, _mime in locals().get('embed_fonts_payload', []) or []:
             zf.writestr(f"OEBPS/fonts/{base}", data)
+        # cover
+        if cover_asset:
+            cover_name, cover_bytes, _cover_mime = cover_asset
+            zf.writestr(f"OEBPS/images/{cover_name}", cover_bytes)
+
+def _image_urls_from_google(query: str, max_n: int = 8) -> List[str]:
+    """Fetch Google Images HTML and extract up to max_n candidate image URLs.
+    Heuristics only; no JS. Excludes gstatic icons.
+    """
+    url = f"https://www.google.com/search?tbm=isch&q={quote_plus(query)}"
+    try:
+        req = Request(url, headers={
+            "User-Agent": UA,
+            "Accept-Language": "ar,en;q=0.8",
+        })
+        with contextlib.closing(urlopen(req, timeout=20)) as resp:
+            html_data = resp.read().decode('utf-8', errors='ignore')
+    except Exception:
+        return []
+    urls: List[str] = []
+    # Primary: JSON field "ou":"<url>"
+    for m in re.finditer(r'"ou":"(https?://[^\"]+)"', html_data):
+        u = m.group(1)
+        if 'gstatic.com' in u or 'google.' in urlparse(u).hostname or 'logo' in u:
+            continue
+        urls.append(u)
+        if len(urls) >= max_n:
+            break
+    # Fallback: direct jpg/png links
+    if not urls:
+        for m in re.finditer(r'(https?://[^\"\s>]+\.(?:jpg|jpeg|png))', html_data, flags=re.I):
+            u = m.group(1)
+            if 'gstatic.com' in u or 'google.' in urlparse(u).hostname or 'logo' in u:
+                continue
+            urls.append(u)
+            if len(urls) >= max_n:
+                break
+    return urls
+
+
+def _download_bytes(url: str) -> Optional[Tuple[bytes, str]]:
+    try:
+        req = Request(url, headers={"User-Agent": UA, "Referer": "https://www.google.com/"})
+        with contextlib.closing(urlopen(req, timeout=30)) as resp:
+            data = resp.read()
+            ctype = resp.headers.get('Content-Type', '').split(';')[0].strip().lower()
+            return data, ctype
+    except Exception:
+        return None
+
+
+def _image_size(data: bytes) -> Optional[Tuple[int, int]]:
+    """Return (width, height) for PNG/JPEG if detectable; else None."""
+    # PNG signature
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        # IHDR chunk: 8(sig)+4(len)+4('IHDR') then 13 bytes
+        if len(data) >= 33 and data[12:16] == b'IHDR':
+            w = int.from_bytes(data[16:20], 'big')
+            h = int.from_bytes(data[20:24], 'big')
+            return w, h
+        return None
+    # JPEG: parse markers for SOF0/2
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i < len(data)-1:
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            # skip padding FFs
+            while i < len(data) and data[i] == 0xFF:
+                i += 1
+            if i >= len(data):
+                break
+            marker = data[i]
+            i += 1
+            # markers without length
+            if marker in (0xD8, 0xD9):
+                continue
+            if i+1 >= len(data):
+                break
+            seg_len = int.from_bytes(data[i:i+2], 'big')
+            if seg_len < 2 or i+seg_len > len(data):
+                break
+            if marker in (0xC0, 0xC2):  # SOF0/2
+                if i+7 < len(data):
+                    # [len(2)] [precision(1)] [height(2)] [width(2)]
+                    h = int.from_bytes(data[i+3:i+5], 'big')
+                    w = int.from_bytes(data[i+5:i+7], 'big')
+                    return w, h
+            i += seg_len
+    return None
 
 
 def build_chapter_xhtml2(title: str, body_html: str, lang: str = "ar") -> str:
@@ -923,7 +1024,7 @@ def _split_chapters(chapters: List[Chapter], per_file: int) -> List[List[Chapter
     return chunks or [chapters]
 
 
-def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle: float = 0.8, limit: Optional[int] = None, **_):
+def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle: float = 0.8, limit: Optional[int] = None, *, cover_auto: bool = False):
     if not re.search(r"https?://[\w.:-]+/book/\d+/?$", book_url):
         # Allow urls with trailing slash omitted
         book_url = re.sub(r"/+$", "", book_url)
@@ -961,8 +1062,41 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
         fname = make_title_filename(meta.title) + ".epub"
         out_path = os.path.join("output", fname)
 
+    # Optional cover auto-fetch
+    cover_asset = None
+    if cover_auto:
+        q_candidates = [
+            f"{meta.book_title or meta.title} cover",
+            f"{meta.book_title or meta.title} book cover",
+            f"{meta.book_title or meta.title} غلاف",
+        ]
+        img_url = None
+        for q in q_candidates:
+            for cand in _image_urls_from_google(q, max_n=8):
+                got = _download_bytes(cand)
+                if not got:
+                    continue
+                data, ctype = got
+                size = _image_size(data)
+                if not size:
+                    continue
+                w, h = size
+                if min(w, h) < 300:
+                    continue
+                ext = 'png' if ('png' in ctype or cand.lower().endswith('.png')) else 'jpg'
+                cover_name = f"cover.{ext}"
+                cover_mime = 'image/png' if ext == 'png' else 'image/jpeg'
+                cover_asset = (cover_name, data, cover_mime)
+                img_url = cand
+                break
+            if img_url:
+                print(f"[+] Cover image fetched: {img_url}")
+                break
+        if not img_url:
+            print("[!] No suitable cover image found (size filter)")
+
     print(f"[+] Writing EPUB: {out_path}")
-    write_epub3(meta, chapters, out_path, minimal_profile=True)
+    write_epub3(meta, chapters, out_path, minimal_profile=True, cover_asset=cover_asset)
     print("[✓] Done.")
 
 
@@ -1169,6 +1303,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("-o", "--output", help="Output EPUB path (default: output/<book title>.epub)")
     ap.add_argument("--throttle", type=float, default=0.8, help="Delay between requests in seconds")
     ap.add_argument("--limit", type=int, default=None, help="Limit number of chapters for a quick run")
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--cover-auto", action="store_true", help="Fetch Google Images result as cover (best-effort)")
+    group.add_argument("--cover", help="Path to local cover image (jpg/png)")
     args = ap.parse_args(argv)
 
     try:
@@ -1184,7 +1321,62 @@ def main(argv: Optional[List[str]] = None) -> int:
             base_name = make_title_filename(combo)
             args.output = os.path.join('output', base_name + '.epub')
 
-        scrape_book_to_epub(args.url, args.output, throttle=args.throttle, limit=args.limit)
+        # If local cover provided, we'll inject it inside scrape
+        if args.cover:
+            # Read and validate cover; then pass via temp flag by monkey-patching helper
+            path = args.cover
+            try:
+                with open(path, 'rb') as fh:
+                    data = fh.read()
+                size = _image_size(data)
+                if not size or min(size) < 300:
+                    print("[!] Local cover too small or unreadable; proceeding without cover", file=sys.stderr)
+                    return scrape_book_to_epub(args.url, args.output, throttle=args.throttle, limit=args.limit, cover_auto=False)
+                ext = os.path.splitext(path)[1].lower()
+                cover_mime = 'image/png' if ext == '.png' else 'image/jpeg'
+                # Inject via wrapper: we call lower-level writer after scrape
+                # Simpler: temporarily write a small wrapper around scrape
+            except Exception as e:
+                print(f"[!] Failed to read cover file: {e}", file=sys.stderr)
+                return scrape_book_to_epub(args.url, args.output, throttle=args.throttle, limit=args.limit, cover_auto=False)
+
+            # Scrape content without auto cover, then rebuild with cover
+            # We'll duplicate minimal part: fetch index + toc + chapters
+            if not re.search(r"https?://[\w.:-]+/book/\d+/?$", args.url):
+                book_url = re.sub(r"/+$", "", args.url)
+            else:
+                book_url = args.url
+            print(f"[+] Fetch book page: {book_url}")
+            index_html = fetch(book_url)
+            meta = parse_book_meta(index_html)
+            toc = parse_toc(book_url, index_html)
+            print(f"[+] TOC entries: {len(toc)}")
+            chapters: List[Chapter] = []
+            for i, item in enumerate(toc, 1):
+                if args.limit is not None and i > args.limit:
+                    break
+                print(f"  - [{i:03d}/{len(toc)}] Fetch chapter id={item.id} …", end="", flush=True)
+                html_text = fetch(item.url, referer=book_url)
+                title = extract_title_from_page(html_text) or item.title
+                cp = ContentParser(); cp.feed(html_text)
+                body_html = cp.get_content()
+                if not body_html:
+                    cleaned = re.sub(r"<div[^>]*class=\"s-nav\"[\s\S]*?</div>", "", html_text)
+                    m = re.search(r'<div[^>]*class="nass[^"]*"[^>]*>([\s\S]*?)</div>', cleaned)
+                    body_html = m.group(1) if m else ""
+                    body_html = html.unescape(body_html)
+                xhtml = build_chapter_xhtml_min(title, body_html)
+                chapters.append(Chapter(id=item.id, order=item.order + 2, title=title, xhtml=xhtml))
+                print(" done.")
+                time.sleep(args.throttle)
+
+            print(f"[+] Writing EPUB: {args.output}")
+            cover_name = 'cover.png' if cover_mime == 'image/png' else 'cover.jpg'
+            write_epub3(meta, chapters, args.output, minimal_profile=True, cover_asset=(cover_name, data, cover_mime))
+            print("[✓] Done.")
+            return 0
+
+        scrape_book_to_epub(args.url, args.output, throttle=args.throttle, limit=args.limit, cover_auto=bool(args.cover_auto))
         return 0
     except Exception as e:  # noqa: BLE001
         print(f"[!] Error: {e}", file=sys.stderr)

@@ -26,6 +26,7 @@ Minimal, Kindle‑friendly EPUB3 builder for books from `shamela.ws`. Focus: cle
 - `--throttle <seconds>`: delay between requests (default 0.8). Use 0.6–1.0 for polite crawling.
 - `--limit <N>`: fetch first N chapters (debugging).
 - `--cover-auto`: try to fetch first Google Images result as cover; falls back to no cover if not found.
+- `--cover path/to.jpg|png`: provide a local cover (recommended ≥ 300×300).
 
 ## What Works / What Doesn’t
 - Works reliably: Minimal EPUB3 (above) — passes Send‑to‑Kindle for this book.
