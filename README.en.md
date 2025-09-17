@@ -33,6 +33,16 @@ Minimal, Kindle‑friendly EPUB builder for books from `shamela.ws`. Focus: clea
 - `--cover-auto`: try to fetch first Google Images result as cover; falls back to no cover if not found.
 - `--cover path/to.jpg|png`: provide a local cover (recommended ≥ 300×300).
 
+### Options Summary
+
+| Option | Description | Default | Example |
+|---|---|---|---|
+| `-o, --output <path>` | Output file path | `output/<Title> - <Publisher>.epub` | `-o output/book.epub` |
+| `--throttle <sec>` | Delay between HTTP requests | `0.8` | `--throttle 0.6` |
+| `--limit <N>` | Fetch only first N chapters (quick test) | all chapters | `--limit 10` |
+| `--cover-auto` | Auto‑search cover (Google Images + size/type filters) | off | `--cover-auto` |
+| `--cover <file>` | Local cover (JPEG/PNG, ≥ 300×300) | none | `--cover cover.jpg` |
+
 ## What Works / What Doesn’t
 - Works reliably: Minimal EPUB (above) — passes Send‑to‑Kindle for this book.
 - Not reliable for Send‑to‑Kindle (kept out by design):
