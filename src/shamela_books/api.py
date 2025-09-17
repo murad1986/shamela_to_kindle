@@ -95,6 +95,10 @@ def build_epub_from_url(
             body_html = m.group(1) if m else ""
             body_html = html.unescape(body_html)
         body_wo, notes = extract_endnotes(body_html)
+        if not body_wo or len(body_wo) < 10:
+            # Fallback sanitizer for Apple Books strictness
+            body_wo = sanitize_fragment_allowlist(body_html)
+            body_wo, notes = extract_endnotes(body_wo)
         with print_lock:
             print(" ok")
         return (idx, _ChapterRaw(it.id, it.order + 2, title, body_wo, notes))
@@ -204,7 +208,8 @@ def build_epub_from_url(
             global_notes.append((gid, text))
             gid_to_chapter_id[gid] = raw.id
         chapter_local_to_gid[raw.id] = local_map
-        linked = link_endnote_refs(raw.body_wo, local_map) if local_map else raw.body_wo
+        sanitized = sanitize_fragment_allowlist(raw.body_wo)
+        linked = link_endnote_refs(sanitized, local_map) if local_map else sanitized
         xhtml = build_chapter_xhtml_min(raw.title, linked)
         chapters.append(Chapter(id=raw.id, order=raw.order, title=raw.title, xhtml=xhtml))
 

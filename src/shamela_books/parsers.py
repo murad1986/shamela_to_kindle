@@ -146,6 +146,7 @@ class ContentParser(HTMLParser):
         self.best_len = 0
         self.tmp_buf = io.StringIO()
         self.skip_depth = 0
+        self.emitted: List[str] = []  # track emitted start tags to enforce proper closing
 
     def handle_starttag(self, tag, attrs):
         attrs_d = dict(attrs)
@@ -171,12 +172,14 @@ class ContentParser(HTMLParser):
             if self.skip_depth > 0 or is_icon or is_button:
                 self.skip_depth += 1
                 return
-            allowed = {"p", "br", "span", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub", "a"}
+            # Keep markup minimal for Apple Books strictness: drop source <span> wrappers and <a> links
+            allowed = {"p", "br", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub"}
             if tag in allowed:
                 attrs_str = "".join(
                     f" {k}={xsu.quoteattr(v)}" for k, v in attrs if k in {"id", "class"}
                 )
                 self.tmp_buf.write(f"<{tag}{attrs_str}>")
+                self.emitted.append(tag)
 
     def handle_endtag(self, tag):
         if tag in {"script", "style"}:
@@ -186,12 +189,19 @@ class ContentParser(HTMLParser):
             if self.skip_depth > 0:
                 self.skip_depth -= 1
                 return
-            if tag in {"p", "span", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub", "a"}:
-                self.tmp_buf.write(f"</{tag}>")
+            # Enforce proper nesting: close any open tags until we reach 'tag'
+            if tag in {"p", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub"}:
+                while self.emitted and self.emitted[-1] != tag:
+                    self.tmp_buf.write(f"</{self.emitted.pop()}>")
+                if self.emitted and self.emitted[-1] == tag:
+                    self.tmp_buf.write(f"</{self.emitted.pop()}>")
 
             self.depth_capture -= 1
             if self.depth_capture == 0:
                 self.capture = False
+                # Close any leftover open tags to keep XHTML well-formed
+                while self.emitted:
+                    self.tmp_buf.write(f"</{self.emitted.pop()}>")
                 html_part = self.tmp_buf.getvalue()
                 L = len(re.sub(r"\s+", " ", html_part))
                 if L > self.best_len:
@@ -208,3 +218,27 @@ class ContentParser(HTMLParser):
     def get_content(self) -> str:
         return self.best_html.strip()
 
+
+def sanitize_fragment_allowlist(html_text: str) -> str:
+    """Very simple sanitizer: keep only a small allowlist of tags; drop attributes.
+    Not a full HTML sanitizer, but sufficient to avoid XML mismatches for Apple Books.
+    """
+    allowed = {
+        'p','br','strong','em','b','i','h1','h2','h3','h4','h5','h6','blockquote','ul','ol','li','sup','sub'
+    }
+    # Remove comments
+    s = re.sub(r"<!--.*?-->", "", html_text, flags=re.S)
+    # Replace disallowed start/end tags with their inner text by stripping tags
+    # First, strip attributes from allowed tags
+    def strip_attrs(m: re.Match) -> str:
+        tag = m.group(1).lower()
+        if tag not in allowed:
+            return ""
+        return f"<{tag}>"
+    s = re.sub(r"<\s*([a-zA-Z0-9]+)(\s+[^>]*)?>", strip_attrs, s)
+    # Close tags: keep only allowed end tags
+    def keep_end(m: re.Match) -> str:
+        tag = m.group(1).lower()
+        return f"</{tag}>" if tag in allowed else ""
+    s = re.sub(r"</\s*([a-zA-Z0-9]+)\s*>", keep_end, s)
+    return s
