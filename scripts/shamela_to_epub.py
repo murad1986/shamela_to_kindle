@@ -1050,14 +1050,18 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
 
     meta = parse_book_meta(index_html)
     toc = parse_toc(book_url, index_html)
+    total = len(toc) if limit is None else min(len(toc), limit)
     print(f"[+] TOC entries: {len(toc)}")
 
     chapters: List[Chapter] = []
     # Минимальный профиль: без обложки и карточки
+    import time as _time
+    t0 = _time.time()
+    done = 0
     for i, item in enumerate(toc, 1):
         if limit is not None and i > limit:
             break
-        print(f"  - [{i:03d}/{len(toc)}] Fetch chapter id={item.id} …", end="", flush=True)
+        print(f"[ {i:03d}/{total:03d} ] id={item.id} …", end="", flush=True)
         html_text = fetch(item.url, referer=book_url)
         title = extract_title_from_page(html_text) or item.title
         cp = ContentParser()
@@ -1071,7 +1075,8 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
             body_html = html.unescape(body_html)
         xhtml = build_chapter_xhtml_min(title, body_html)
         chapters.append(Chapter(id=item.id, order=item.order + 2, title=title, xhtml=xhtml))
-        print(" done.")
+        done += 1
+        print(" ok")
         time.sleep(throttle)
 
     # Output path (default: book title)
@@ -1116,6 +1121,8 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
         if not img_url:
             print("[!] No suitable cover image found (size filter)")
 
+    dt = _time.time() - t0
+    print(f"[=] Fetched {done}/{total} chapters in {dt:.1f}s")
     print(f"[+] Writing EPUB: {out_path}")
     write_epub3(meta, chapters, out_path, minimal_profile=True, cover_asset=cover_asset)
     print("[✓] Done.")
