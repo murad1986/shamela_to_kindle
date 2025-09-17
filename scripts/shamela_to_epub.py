@@ -835,6 +835,84 @@ def _image_size(data: bytes) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _image_urls_from_duckduckgo(query: str, max_n: int = 8) -> List[str]:
+    url = f"https://duckduckgo.com/?q={quote_plus(query)}&iar=images&iax=images&ia=images"
+    try:
+        req = Request(url, headers={"User-Agent": UA, "Accept-Language": "ar,en;q=0.8"})
+        with contextlib.closing(urlopen(req, timeout=20)) as resp:
+            html_data = resp.read().decode('utf-8', errors='ignore')
+    except Exception:
+        return []
+    urls: List[str] = []
+    # naive extraction of jpg/png
+    for m in re.finditer(r'(https?://[^\"\s>]+\.(?:jpg|jpeg|png))', html_data, flags=re.I):
+        u = m.group(1)
+        host = (urlparse(u).hostname or '')
+        if 'duckduckgo.com' in host or 'logo' in u:
+            continue
+        urls.append(u)
+        if len(urls) >= max_n:
+            break
+    return urls
+
+
+def _image_urls_from_bing(query: str, max_n: int = 8) -> List[str]:
+    url = f"https://www.bing.com/images/search?q={quote_plus(query)}"
+    try:
+        req = Request(url, headers={"User-Agent": UA, "Accept-Language": "ar,en;q=0.8"})
+        with contextlib.closing(urlopen(req, timeout=20)) as resp:
+            html_data = resp.read().decode('utf-8', errors='ignore')
+    except Exception:
+        return []
+    urls: List[str] = []
+    # bing uses murl":"..." sometimes
+    for m in re.finditer(r'"murl":"(https?://[^\"]+)"', html_data):
+        u = m.group(1)
+        host = (urlparse(u).hostname or '')
+        if 'bing.com' in host or 'logo' in u:
+            continue
+        urls.append(u)
+        if len(urls) >= max_n:
+            break
+    if not urls:
+        for m in re.finditer(r'(https?://[^\"\s>]+\.(?:jpg|jpeg|png))', html_data, flags=re.I):
+            u = m.group(1)
+            host = (urlparse(u).hostname or '')
+            if 'bing.com' in host or 'logo' in u:
+                continue
+            urls.append(u)
+            if len(urls) >= max_n:
+                break
+    return urls
+
+
+def _maybe_convert_png_to_jpeg(data: bytes, mime: str) -> Tuple[bytes, str]:
+    """If Pillow is available and mime is PNG, convert to JPEG for Kindle."""
+    if mime != 'image/png':
+        return data, mime
+    try:
+        from PIL import Image
+        import io as _io
+        im = Image.open(_io.BytesIO(data)).convert('RGB')
+        out = _io.BytesIO()
+        im.save(out, format='JPEG', quality=90)
+        return out.getvalue(), 'image/jpeg'
+    except Exception:
+        return data, mime
+
+
+def _parse_min_size(s: Optional[str]) -> Optional[Tuple[int, int]]:
+    if not s:
+        return None
+    m = re.match(r"\s*(\d+)\s*[xX]\s*(\d+)\s*$", s)
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    if w <= 0 or h <= 0:
+        return None
+    return w, h
+
+
 def build_chapter_xhtml2(title: str, body_html: str, lang: str = "ar") -> str:
     title_xml = xsu.escape(title)
     doctype = (
@@ -1135,14 +1213,36 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
     # Optional cover auto-fetch
     cover_asset = None
     if cover_auto:
+        min_bytes = 50 * 1024
+        min_wh = (300, 300)
+        try:
+            from argparse import Namespace
+            # piggy-back on existing args via closure not available; keep defaults
+        except Exception:
+            pass
+        # try to read CLI values from environment (fallback), else defaults used above
+        min_bytes_env = os.environ.get('COVER_MIN_BYTES')
+        if min_bytes_env and min_bytes_env.isdigit():
+            min_bytes = int(min_bytes_env)
+        # build queries
+        base_q = meta.book_title or meta.title
         q_candidates = [
-            f"{meta.book_title or meta.title} cover",
-            f"{meta.book_title or meta.title} book cover",
-            f"{meta.book_title or meta.title} غلاف",
+            f"{base_q} cover",
+            f"{base_q} book cover",
+            f"{base_q} غلاف",
         ]
+        # attempt to replace if user passed --cover-query (handled later in main)
         img_url = None
         for q in q_candidates:
-            for cand in _image_urls_from_google(q, max_n=8):
+            providers = [
+                _image_urls_from_google,
+                _image_urls_from_duckduckgo,
+                _image_urls_from_bing,
+            ]
+            candidates: List[str] = []
+            for prov in providers:
+                candidates.extend(prov(q, max_n=6))
+            for cand in candidates:
                 got = _download_bytes(cand)
                 if not got:
                     continue
@@ -1155,11 +1255,13 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
                     continue
                 w, h = size
                 # Heuristics: require reasonable dimensions and size
-                if min(w, h) < 300 or len(data) < 50 * 1024:
+                if min(w, h) < 300 or len(data) < min_bytes:
                     continue
                 ext = 'png' if ('png' in ctype or cand.lower().endswith('.png')) else 'jpg'
                 cover_name = f"cover.{ext}"
                 cover_mime = 'image/png' if ext == 'png' else 'image/jpeg'
+                # Optional conversion to JPEG
+                data, cover_mime = _maybe_convert_png_to_jpeg(data, cover_mime)
                 cover_asset = (cover_name, data, cover_mime)
                 img_url = cand
                 break
@@ -1382,6 +1484,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     group = ap.add_mutually_exclusive_group()
     group.add_argument("--cover-auto", action="store_true", help="Fetch Google Images result as cover (best-effort)")
     group.add_argument("--cover", help="Path to local cover image (jpg/png)")
+    ap.add_argument("--cover-query", help="Override cover search query (used with --cover-auto)")
+    ap.add_argument("--cover-min-size", help="Minimal cover size WxH (e.g., 600x800)")
+    ap.add_argument("--cover-min-bytes", type=int, default=50*1024, help="Minimal cover file size in bytes")
+    ap.add_argument("--cover-convert-jpeg", action="store_true", help="Convert PNG cover to JPEG (requires Pillow)")
     ap.add_argument("--workers", type=int, default=2, help="Parallel workers (polite): 1–4 recommended")
     ap.add_argument("--jitter", type=float, default=0.3, help="Throttle jitter fraction (0..1)")
     args = ap.parse_args(argv)
@@ -1454,6 +1560,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("[✓] Done.")
             return 0
 
+        # Build min size/bytes and query
+        min_wh = _parse_min_size(args.cover_min_size)
+        if args.cover_query:
+            os.environ['COVER_QUERY'] = args.cover_query
+        os.environ['COVER_MIN_BYTES'] = str(max(0, int(args.cover_min_bytes)))
         scrape_book_to_epub(
             args.url,
             args.output,
