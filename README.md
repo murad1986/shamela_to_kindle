@@ -17,14 +17,21 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 
 ## Структура
 - `src/shamela_books/` — библиотека (парсеры, сборщик EPUB, CLI).
-- `scripts/` — совместимость/обёртки (устаревает).
 - `output/` — готовые файлы (EPUB).
+- `docs/` — подробная документация (использование, сноски, Apple Books, разработка).
 
 ## Быстрый старт
 - Python 3.11+: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
 - Через CLI: `shamela-to-epub 'https://shamela.ws/book/158' --throttle 0.6`
 - С обложкой: `--cover-auto` или `--cover path/to.jpg|png`
 - Результат: `output/<Название книги> - <Издатель>.epub`.
+
+## Документация
+- Руководство по использованию: `docs/USAGE.ru.md`
+- Сноски: дизайн и реализация: `docs/ENDNOTES.ru.md`
+- Совместимость с Apple Books: `docs/APPLE_BOOKS.ru.md`
+- Разработка/контрибуции: `docs/DEVELOPMENT.ru.md`
+- Диагностика и FAQ: `docs/TROUBLESHOOTING.ru.md`
 
 ## Использование как модуль
 ```python
