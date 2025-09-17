@@ -15,6 +15,7 @@ Minimal, Kindle‑friendly EPUB3 builder for books from `shamela.ws`. Focus: cle
 
 ## Usage
 - Full book: `python3 scripts/shamela_to_epub.py 'https://shamela.ws/book/158' --throttle 0.6`
+- With cover (Google Images): add `--cover-auto`
 - Quick test (first N chapters): `--limit N`
 - Output file name: `<Title> - <Publisher>.epub`
   - Arabic preserved, spaces intact, no underscores.
@@ -24,6 +25,7 @@ Minimal, Kindle‑friendly EPUB3 builder for books from `shamela.ws`. Focus: cle
 - `-o, --output`: custom output path.
 - `--throttle <seconds>`: delay between requests (default 0.8). Use 0.6–1.0 for polite crawling.
 - `--limit <N>`: fetch first N chapters (debugging).
+- `--cover-auto`: try to fetch first Google Images result as cover; falls back to no cover if not found.
 
 ## What Works / What Doesn’t
 - Works reliably: Minimal EPUB3 (above) — passes Send‑to‑Kindle for this book.
@@ -36,4 +38,3 @@ Minimal, Kindle‑friendly EPUB3 builder for books from `shamela.ws`. Focus: cle
 - Respect the website. Throttle requests and avoid parallel scraping.
 - Resulting chapters are right‑to‑left; rendering depends on your reader.
 - If Kindle still rejects, try USB copy to device (no server conversion).
-
