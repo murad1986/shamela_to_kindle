@@ -98,6 +98,16 @@ BIDI_CTRL = {
 }
 
 
+_AR_DIGITS = str.maketrans({
+    "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
+    "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
+})
+
+
+def ar_digits_to_ascii(s: str) -> str:
+    return s.translate(_AR_DIGITS)
+
+
 def norm_ar_text(s: str) -> str:
     """Normalize Arabic titles for display while preserving diacritics.
     - Decode entities
@@ -408,6 +418,103 @@ def build_chapter_xhtml(title: str, body_html: str, lang: str = "ar") -> str:
         "</body>\n"
         "</html>\n"
     ) % (lang, lang, title_xml, title_xml, body_html)
+
+
+# -----------------------------
+# Endnotes extraction and linking
+# -----------------------------
+
+
+_RE_HAMESH = re.compile(r"(?:<hr[^>]*>\s*)?<p[^>]*class=\"[^\"]*\\bhamesh\\b[^\"]*\"[^>]*>([\s\S]*?)</p>", re.I)
+_RE_BR = re.compile(r"<br\s*/?>", re.I)
+_RE_NUM_LINE = re.compile(r"^\s*\(\s*([0-9\u0660-\u0669]+)\s*\)\s*(.+)$")
+_RE_TAGS = re.compile(r"<[^>]+>")
+_RE_REF_PAREN = re.compile(r"\(\s*([0-9\u0660-\u0669]+)\s*\)")
+
+
+def extract_endnotes(body_html: str) -> tuple[str, list[tuple[str, str]]]:
+    """Extract endnotes from tail <p class="hamesh"> and remove it (and optional hr) from body.
+    Returns (body_without_hamesh, notes) where notes is list of (num_ascii, text).
+    """
+    m = _RE_HAMESH.search(body_html)
+    if not m:
+        return body_html, []
+    inner = m.group(1)
+    parts = _RE_BR.split(inner)
+    notes: list[tuple[str, str]] = []
+    current_num = None
+    current_text_parts: list[str] = []
+    def flush():
+        nonlocal current_num, current_text_parts
+        if current_num is not None:
+            text = " ".join(t for t in current_text_parts if t).strip()
+            notes.append((current_num, text))
+        current_num = None
+        current_text_parts = []
+    for raw in parts:
+        line = html.unescape(_RE_TAGS.sub("", raw)).strip()
+        if not line:
+            continue
+        mm = _RE_NUM_LINE.match(line)
+        if mm:
+            # new note starts
+            flush()
+            num_ascii = ar_digits_to_ascii(mm.group(1))
+            txt = mm.group(2).strip()
+            current_num = num_ascii
+            current_text_parts = [txt]
+        else:
+            # continuation line
+            if current_num is not None:
+                current_text_parts.append(line)
+            else:
+                # ignore stray lines in hamesh that are not numbered
+                pass
+    flush()
+    # Remove whole block from body
+    body_wo = body_html[:m.start()] + body_html[m.end():]
+    return body_wo, notes
+
+
+def link_endnote_refs(body_html: str, num_map: dict[str, int]) -> str:
+    """Replace (N) markers in text with sup/anchor links to global notes.
+    Only numbers present in num_map are linked.
+    """
+    def repl(match: re.Match) -> str:
+        disp = match.group(0)  # e.g., (١)
+        num_disp = match.group(1)
+        num_ascii = ar_digits_to_ascii(num_disp)
+        if num_ascii not in num_map:
+            return disp
+        gid = num_map[num_ascii]
+        # preserve display (as in source)
+        return f"<sup><a id=\"ref-{gid}\" href=\"#note-{gid}\">{num_disp}</a></sup>"
+    return _RE_REF_PAREN.sub(repl, body_html)
+
+
+def build_endnotes_xhtml(lang: str, entries: list[tuple[int, str]]) -> str:
+    items = []
+    for gid, text in entries:
+        t_xml = xsu.escape(text)
+        items.append(f"<li id=\"note-{gid}\"><span class=\"note-num\">{gid}.</span> {t_xml} <a href=\"#ref-{gid}\">↩︎</a></li>")
+    ol = "\n".join(items)
+    title = "الهوامش"
+    return (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
+        "<head>\n"
+        "  <meta charset=\"utf-8\"/>\n"
+        "  <title>%s</title>\n"
+        "  <link rel=\"stylesheet\" type=\"text/css\" href=\"../css/style.css\"/>\n"
+        "</head>\n"
+        "<body>\n"
+        "  <section epub:type=\"backmatter endnotes\">\n"
+        "    <h1 class=\"chapter-title\">%s</h1>\n"
+        "    <ol class=\"endnotes\">%s</ol>\n"
+        "  </section>\n"
+        "</body>\n"
+        "</html>\n"
+    ) % (lang, lang, xsu.escape(title), xsu.escape(title), ol)
 
 
 def build_chapter_xhtml_min(title: str, body_html: str, lang: str = "ar") -> str:
@@ -1170,6 +1277,9 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
     done = 0
     print_lock = threading.Lock()
     limiter = RateLimiter(throttle, jitter=jitter)
+    notes_lock = threading.Lock()
+    global_notes: List[tuple[int, str]] = []
+    next_gid = [1]
 
     def worker(idx_item):
         idx, it = idx_item
@@ -1185,7 +1295,18 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
             m = re.search(r'<div[^>]*class="nass[^"]*"[^>]*>([\s\S]*?)</div>', cleaned)
             body_html = m.group(1) if m else ""
             body_html = html.unescape(body_html)
-        xhtml = build_chapter_xhtml_min(title, body_html)
+        # Endnotes: extract from tail and link references
+        body_wo, notes = extract_endnotes(body_html)
+        local_to_global: dict[str, int] = {}
+        if notes:
+            with notes_lock:
+                for num_ascii, text in notes:
+                    gid = next_gid[0]
+                    next_gid[0] += 1
+                    local_to_global[num_ascii] = gid
+                    global_notes.append((gid, text))
+        body_linked = link_endnote_refs(body_wo, local_to_global) if local_to_global else body_wo
+        xhtml = build_chapter_xhtml_min(title, body_linked)
         with print_lock:
             print(" ok")
         return Chapter(id=it.id, order=it.order + 2, title=title, xhtml=xhtml)
@@ -1281,6 +1402,9 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
     dt = _time.time() - t0
     print(f"[=] Fetched {done}/{total} chapters in {dt:.1f}s")
     print(f"[+] Writing EPUB: {out_path}")
+    if global_notes:
+        en_xhtml = build_endnotes_xhtml(meta.language, global_notes)
+        chapters.append(Chapter(id=0, order=10**6, title="الهوامش", xhtml=en_xhtml))
     write_epub3(meta, chapters, out_path, minimal_profile=True, cover_asset=cover_asset)
     print("[✓] Done.")
 
