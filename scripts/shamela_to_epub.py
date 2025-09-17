@@ -1226,11 +1226,15 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
             min_bytes = int(min_bytes_env)
         # build queries
         base_q = meta.book_title or meta.title
-        q_candidates = [
-            f"{base_q} cover",
-            f"{base_q} book cover",
-            f"{base_q} غلاف",
-        ]
+        q_env = os.environ.get('COVER_QUERY')
+        if q_env:
+            q_candidates = [q_env]
+        else:
+            q_candidates = [
+                f"{base_q} cover",
+                f"{base_q} book cover",
+                f"{base_q} غلاف",
+            ]
         # attempt to replace if user passed --cover-query (handled later in main)
         img_url = None
         for q in q_candidates:
@@ -1255,7 +1259,10 @@ def scrape_book_to_epub(book_url: str, out_path: Optional[str] = None, throttle:
                     continue
                 w, h = size
                 # Heuristics: require reasonable dimensions and size
-                if min(w, h) < 300 or len(data) < min_bytes:
+                # read min size from env if provided
+                wmin = int(os.environ.get('COVER_MIN_W', str(min_wh[0])))
+                hmin = int(os.environ.get('COVER_MIN_H', str(min_wh[1])))
+                if min(w, h) < min(wmin, hmin) or len(data) < min_bytes:
                     continue
                 ext = 'png' if ('png' in ctype or cand.lower().endswith('.png')) else 'jpg'
                 cover_name = f"cover.{ext}"
@@ -1565,6 +1572,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.cover_query:
             os.environ['COVER_QUERY'] = args.cover_query
         os.environ['COVER_MIN_BYTES'] = str(max(0, int(args.cover_min_bytes)))
+        if min_wh:
+            os.environ['COVER_MIN_W'] = str(min_wh[0])
+            os.environ['COVER_MIN_H'] = str(min_wh[1])
+        # Default behavior: if neither --cover nor --cover-auto are set, enable cover auto
+        if not args.cover and not args.cover_auto:
+            args.cover_auto = True
         scrape_book_to_epub(
             args.url,
             args.output,
