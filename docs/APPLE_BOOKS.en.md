@@ -11,8 +11,9 @@ Apple Books validates XHTML as strict XML and is sensitive to namespaces and tag
 
 - Strict XML validity:
   - Source contains `<span>`/`<a>` wrappers (copy buttons/anchors) that break nesting.
-  - We remove all source `<span>` and `<a>` preserving a small allowlist: `p, br, strong, em, b, i, h1..h6, blockquote, ul, ol, li, sup, sub`.
+  - We remove all source `<span>` and `<a>` preserving a small allowlist: `p, br, strong, em, b, i, h1..h6, blockquote, ul, ol, li, sup, sub, table, thead, tbody, tr, th, td, pre, code, figure, figcaption, img, hr`.
   - Content parser closes tags in correct order; a fallback allowlist sanitizer is applied before writing.
+  - Use `--profile apple` to enable stricter sanitizer.
 
 - Endnotes:
   - In text: global `G` linking to `endnotes.xhtml#note-G`.
@@ -28,4 +29,3 @@ Apple Books validates XHTML as strict XML and is sensitive to namespaces and tag
 
 - `epub:type` is preserved; semantic richness is not required for Apple Books — valid XML is.
 - If the source adds new wrappers/classes, we may extend the allowlist sanitizer.
-

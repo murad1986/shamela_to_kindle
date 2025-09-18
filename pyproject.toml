@@ -16,6 +16,9 @@ dev = [
 cover = [
   "pillow>=10.0",
 ]
+sanitize = [
+  "bleach>=6.0",
+]
 
 [project.scripts]
 # Route console entry through the package (library-first).

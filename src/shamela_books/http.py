@@ -6,6 +6,7 @@ from typing import Optional
 import contextlib
 from urllib.request import Request, urlopen
 
+from . import cache as _cache
 
 UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -13,9 +14,17 @@ UA = (
 )
 
 
-def fetch(url: str, *, referer: Optional[str] = None, retry: int = 3, sleep: float = 1.0) -> str:
-    """Fetch URL text as UTF-8 with basic retries."""
+def fetch(url: str, *, referer: Optional[str] = None, retry: int = 3, sleep: float = 1.0, use_cache: bool = True) -> str:
+    """Fetch URL text as UTF-8 with basic retries and optional cache."""
     last_err: Optional[Exception] = None
+    if use_cache:
+        got = _cache.get_bytes("html", url)
+        if got is not None:
+            data, _ctype = got
+            try:
+                return data.decode("utf-8", errors="ignore")
+            except Exception:
+                pass
     for attempt in range(retry):
         try:
             req = Request(
@@ -28,6 +37,11 @@ def fetch(url: str, *, referer: Optional[str] = None, retry: int = 3, sleep: flo
             )
             with contextlib.closing(urlopen(req, timeout=20)) as resp:
                 data = resp.read()
+            if use_cache:
+                try:
+                    _cache.put_bytes("html", url, data, "text/html")
+                except Exception:
+                    pass
             return data.decode("utf-8", errors="ignore")
         except Exception as e:  # noqa: BLE001
             last_err = e

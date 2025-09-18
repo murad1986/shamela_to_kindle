@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import re
 import xml.sax.saxutils as xsu
-from typing import Tuple
+from typing import Tuple, Optional
 
 from .utils import ar_digits_to_ascii
 
@@ -14,47 +14,59 @@ _RE_NUM_LINE_PAREN = re.compile(r"^\s*\(\s*([0-9\u0660-\u0669]+)\s*\)\s*(.+)$")
 _RE_NUM_LINE_SEP = re.compile(r"^\s*([0-9\u0660-\u0669]+)\s*[\.\-–—:\)]\s*(.+)$")
 _RE_TAGS = re.compile(r"<[^>]+>")
 _RE_REF_PAREN = re.compile(r"\(\s*([0-9\u0660-\u0669]+)\s*\)")
+_RE_REF_BRACK = re.compile(r"\[\s*([0-9\u0660-\u0669]+)\s*\]")
 
 
 def extract_endnotes(body_html: str) -> tuple[str, list[tuple[str, str]]]:
-    """Extract endnotes from tail <p class="hamesh"> and remove it (and optional hr).
-    Returns (body_without_hamesh, notes) where notes is list of (num_ascii, text).
+    """Extract endnotes from one or more <p class="hamesh"> blocks.
+    Returns (body_without_hamesh, notes) where notes is list of (num_ascii, text),
+    deduplicated by numeric key, preserving first occurrence.
     """
-    m = _RE_HAMESH.search(body_html)
-    if not m:
-        return body_html, []
-    inner = m.group(1)
-    parts = _RE_BR.split(inner)
-    notes: list[tuple[str, str]] = []
-    current_num = None
-    current_text_parts: list[str] = []
+    notes_map: dict[str, str] = {}
+    last_end = 0
+    out_parts: list[str] = []
+    for m in _RE_HAMESH.finditer(body_html):
+        # Keep content before this hamesh block
+        out_parts.append(body_html[last_end:m.start()])
+        inner = m.group(1)
+        parts = _RE_BR.split(inner)
+        current_num: Optional[str] = None
+        current_text_parts: list[str] = []
 
-    def flush():
-        nonlocal current_num, current_text_parts
-        if current_num is not None:
-            text = " ".join(t for t in current_text_parts if t).strip()
-            notes.append((current_num, text))
-        current_num = None
-        current_text_parts = []
-
-    for raw in parts:
-        line = html.unescape(_RE_TAGS.sub("", raw)).strip()
-        if not line:
-            continue
-        mm = _RE_NUM_LINE_PAREN.match(line) or _RE_NUM_LINE_SEP.match(line)
-        if mm:
-            flush()
-            num_ascii = ar_digits_to_ascii(mm.group(1))
-            txt = mm.group(2).strip()
-            current_num = num_ascii
-            current_text_parts = [txt]
-        else:
+        def flush():
+            nonlocal current_num, current_text_parts
             if current_num is not None:
-                current_text_parts.append(line)
+                text = " ".join(t for t in current_text_parts if t).strip()
+                if current_num not in notes_map and text:
+                    notes_map[current_num] = text
+            current_num = None
+            current_text_parts = []
+
+        for raw in parts:
+            line = html.unescape(_RE_TAGS.sub("", raw)).strip()
+            if not line:
+                continue
+            mm = _RE_NUM_LINE_PAREN.match(line) or _RE_NUM_LINE_SEP.match(line)
+            if mm:
+                flush()
+                num_ascii = ar_digits_to_ascii(mm.group(1))
+                txt = mm.group(2).strip()
+                current_num = num_ascii
+                current_text_parts = [txt]
             else:
-                pass
-    flush()
-    body_wo = body_html[:m.start()] + body_html[m.end():]
+                if current_num is not None:
+                    current_text_parts.append(line)
+        flush()
+        last_end = m.end()
+    # Append remainder after last hamesh (or whole body if none)
+    out_parts.append(body_html[last_end:])
+    body_wo = "".join(out_parts)
+    notes = [(k, v) for k, v in notes_map.items()]
+    # Keep numeric order if possible
+    try:
+        notes.sort(key=lambda kv: int(kv[0]))
+    except Exception:
+        pass
     return body_wo, notes
 
 
@@ -110,6 +122,16 @@ def link_endnote_refs(body_html: str, num_map: dict[str, int]) -> str:
 
     # Finally, link remaining (N) markers in plain text (outside <sup>..</sup>)
     out = _RE_REF_PAREN.sub(repl_paren, out)
+    # And [N] markers
+    def repl_brack(match: re.Match) -> str:
+        disp = match.group(0)
+        num_disp = match.group(1)
+        num_ascii = ar_digits_to_ascii(num_disp)
+        if num_ascii not in num_map:
+            return disp
+        gid = num_map[num_ascii]
+        return f"<sup><a id=\"ref-{gid}\" href=\"endnotes.xhtml#note-{gid}\">{gid}</a></sup>"
+    out = _RE_REF_BRACK.sub(repl_brack, out)
     return out
 
 

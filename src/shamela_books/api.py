@@ -4,11 +4,11 @@ import html
 import os
 import re
 import threading
-from typing import List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .http import fetch, RateLimiter
 from .models import BookMeta, Chapter
-from .parsers import parse_book_meta, parse_toc, ContentParser, sanitize_fragment_allowlist
+from .parsers import parse_book_meta, parse_toc, ContentParser
 from .parsers import extract_book_id  # re-exported helper
 from .exceptions import ShamelaError, CoverError
 from .utils import norm_ar_text
@@ -22,6 +22,22 @@ from .cover import (
     _image_size,
     _maybe_convert_png_to_jpeg,
 )
+from .providers import Provider, ShamelaProvider
+from .sanitizer import sanitize_fragment
+
+
+class BuildEvent(dict):
+    """Opaque event object for progress reporting."""
+    pass
+
+
+def _emit(cb: Optional[Callable[[BuildEvent], None]], ev: BuildEvent) -> None:
+    if cb:
+        try:
+            cb(ev)
+        except Exception:
+            # Never let callbacks break the build
+            pass
 
 
 def extract_title_from_page(html_text: str) -> Optional[str]:
@@ -54,19 +70,27 @@ def build_epub_from_url(
     cover_query: Optional[str] = None,
     cover_min_size: Optional[Tuple[int, int]] = None,
     cover_min_bytes: int = 50 * 1024,
+    cover_aspect_min: float = 0.5,
+    cover_aspect_max: float = 2.2,
+    provider: Optional[Provider] = None,
+    on_event: Optional[Callable[[BuildEvent], None]] = None,
+    images_min_bytes: int = 1 * 1024,
+    images_min_size: Optional[Tuple[int, int]] = (200, 200),
+    profile: str = "minimal",
+    use_cache: bool = True,
 ) -> str:
     if not re.search(r"https?://[\w.:-]+/book/\d+/?$", book_url):
         book_url = re.sub(r"/+$", "", book_url)
         if not re.search(r"https?://[\w.:-]+/book/\d+$", book_url):
             raise ShamelaError("Invalid book URL. Expected https://shamela.ws/book/<id>")
-    index_html = fetch(book_url)
+    _prov = provider or ShamelaProvider()
+    index_html = _prov.fetch_index(book_url, use_cache=use_cache)
     meta = parse_book_meta(index_html)
-    toc = parse_toc(book_url, index_html)
+    toc = _prov.parse_toc(book_url, index_html)
     if not toc:
         raise ShamelaError("TOC parsing returned no chapters.")
     total = len(toc) if limit is None else min(len(toc), limit)
 
-    print_lock = threading.Lock()
     limiter = RateLimiter(throttle, jitter=jitter)
 
     class _ChapterRaw:
@@ -82,10 +106,9 @@ def build_epub_from_url(
 
     def worker(idx_item):
         idx, it = idx_item
-        with print_lock:
-            print(f"[ {idx:03d}/{total:03d} ] id={it.id} …", end="", flush=True)
+        _emit(on_event, BuildEvent(type="chapter_fetch_start", index=idx, id=it.id))
         limiter.wait()
-        html_text = fetch(it.url, referer=book_url)
+        html_text = _prov.fetch_chapter(it.url, referer=book_url, use_cache=use_cache)
         title = extract_title_from_page(html_text) or it.title
         cp = ContentParser(); cp.feed(html_text)
         body_html = cp.get_content()
@@ -97,10 +120,9 @@ def build_epub_from_url(
         body_wo, notes = extract_endnotes(body_html)
         if not body_wo or len(body_wo) < 10:
             # Fallback sanitizer for Apple Books strictness
-            body_wo = sanitize_fragment_allowlist(body_html)
+            body_wo = sanitize_fragment(body_html, profile=profile)
             body_wo, notes = extract_endnotes(body_wo)
-        with print_lock:
-            print(" ok")
+        _emit(on_event, BuildEvent(type="chapter_fetch_done", index=idx, id=it.id))
         return (idx, _ChapterRaw(it.id, it.order + 2, title, body_wo, notes))
 
     items = list(enumerate(toc[:total], start=1))
@@ -164,7 +186,7 @@ def build_epub_from_url(
             for prov in providers:
                 candidates.extend(prov(q, max_n=6))
             for cand in candidates:
-                got = _download_bytes(cand)
+                got = _download_bytes(cand, use_cache=use_cache)
                 if not got:
                     continue
                 data, ctype = got
@@ -174,7 +196,12 @@ def build_epub_from_url(
                 if not size:
                     continue
                 w, h = size
-                if min(w, h) < min(wmin, hmin) or len(data) < min_bytes:
+                aspect = (w / h) if h else 0.0
+                if (
+                    min(w, h) < min(wmin, hmin)
+                    or len(data) < min_bytes
+                    or (aspect and (aspect < float(cover_aspect_min) or aspect > float(cover_aspect_max)))
+                ):
                     continue
                 ext = 'png' if ('png' in ctype or cand.lower().endswith('.png')) else 'jpg'
                 cover_name = f"cover.{ext}"
@@ -196,6 +223,11 @@ def build_epub_from_url(
     gid_to_chapter_id: dict[int, int] = {}
     next_gid = 1
     chapter_local_to_gid: dict[int, dict[str, int]] = {}
+    # Collect sub-TOC per chapter and inline images for embedding
+    subnav_by_chapter: Dict[int, List[Tuple[str, str]]] = {}
+    image_assets: List[Tuple[str, bytes, str]] = []  # (basename, data, mime)
+    img_counter = 1
+    gid_to_section_id: Dict[int, str] = {}
     for idx, _ in items:
         raw = fetched.get(idx)
         if not raw:
@@ -208,9 +240,86 @@ def build_epub_from_url(
             global_notes.append((gid, text))
             gid_to_chapter_id[gid] = raw.id
         chapter_local_to_gid[raw.id] = local_map
-        sanitized = sanitize_fragment_allowlist(raw.body_wo)
-        linked = link_endnote_refs(sanitized, local_map) if local_map else sanitized
-        xhtml = build_chapter_xhtml_min(raw.title, linked)
+        sanitized = sanitize_fragment(raw.body_wo, profile=profile)
+        # Rewrite and embed images
+        def _embed_images(html_in: str) -> str:
+            nonlocal img_counter
+            def repl(m: re.Match) -> str:
+                nonlocal img_counter
+                tag = m.group(0)
+                src = m.group(1)
+                alt = m.group(2) or ""
+                if not src or not re.match(r"https?://", src):
+                    return tag
+                got = _download_bytes(src, use_cache=use_cache)
+                if not got:
+                    return tag
+                data, ctype = got
+                if ctype not in ("image/jpeg", "image/jpg", "image/png"):
+                    return tag
+                if len(data) < max(0, int(images_min_bytes)):
+                    return tag
+                size = _image_size(data)
+                if size:
+                    w, h = size
+                    if images_min_size is not None:
+                        wmin, hmin = images_min_size
+                        if min(w, h) < min(wmin, hmin):
+                            return tag
+                ext = 'png' if (ctype == 'image/png' or src.lower().endswith('.png')) else 'jpg'
+                base = f"img{img_counter:04d}.{ext}"
+                img_counter += 1
+                # Avoid duplicates by simple content hash-like check (size + first bytes)
+                # (minimal; real impl could hash)
+                image_assets.append((base, data, 'image/png' if ext == 'png' else 'image/jpeg'))
+                new_src = f"../images/{base}"
+                return f"<img src=\"{new_src}\" alt=\"{html.escape(alt)}\" />"
+            # Capture img with src and optional alt
+            return re.sub(r"<img[^>]*src=\"([^\"]+)\"[^>]*?(?:alt=\"([^\"]*)\")?[^>]*/?>", repl, html_in, flags=re.I)
+
+        sanitized = _embed_images(sanitized)
+        # Add ids to h2/h3 and collect sub-TOC
+        def _add_ids_to_headings(html_in: str) -> Tuple[str, List[Tuple[str, str]]]:
+            sub = []
+            idx_local = 1
+            def add_id(m: re.Match) -> str:
+                nonlocal idx_local
+                tag = m.group(1).lower()
+                inner = m.group(2)
+                # Strip tags inside heading, keep text for anchor title
+                inner_txt = re.sub(r"<[^>]+>", "", inner)
+                inner_txt = norm_ar_text(inner_txt)
+                aid = f"sec-{raw.id}-{idx_local}"
+                idx_local += 1
+                sub.append((aid, inner_txt))
+                return f"<{tag} id=\"{aid}\">{inner}</{tag}>"
+            out = re.sub(r"<(h2|h3)\b[^>]*>([\s\S]*?)</\1>", add_id, html_in, flags=re.I)
+            return out, sub
+
+        linked_body = link_endnote_refs(sanitized, local_map) if local_map else sanitized
+        linked_body, sub = _add_ids_to_headings(linked_body)
+        # Map each gid to nearest preceding section (h2/h3) within this chapter
+        if local_map:
+            # Build list of headings in document order
+            heads = [(m.start(), m.group(1)) for m in re.finditer(r"<(?:h2|h3)\b[^>]*id=\"([^\"]+)\"[^>]*>", linked_body, flags=re.I)]
+            heads.sort()
+            def nearest_section(pos: int) -> Optional[str]:
+                cur = None
+                for hp, hid in heads:
+                    if hp <= pos:
+                        cur = hid
+                    else:
+                        break
+                return cur
+            # Find positions of ref anchors and map to section id
+            for mref in re.finditer(r"id=\"ref-(\d+)\"", linked_body):
+                gid = int(mref.group(1))
+                sec = nearest_section(mref.start())
+                if sec:
+                    gid_to_section_id[gid] = sec
+        if sub:
+            subnav_by_chapter[raw.id] = sub
+        xhtml = build_chapter_xhtml_min(raw.title, linked_body)
         chapters.append(Chapter(id=raw.id, order=raw.order, title=raw.title, xhtml=xhtml))
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -222,5 +331,21 @@ def build_epub_from_url(
         cover_asset=cover_asset,
         endnotes_entries=global_notes if global_notes else None,
         endnote_gid_to_chapter_id=gid_to_chapter_id if global_notes else None,
+        inline_images=image_assets if image_assets else None,
+        subnav_by_chapter=subnav_by_chapter if subnav_by_chapter else None,
+        endnote_gid_to_section_id=gid_to_section_id if gid_to_section_id else None,
     )
     return out_path
+
+
+def fetch_toc(book_url: str, *, provider: Optional[Provider] = None) -> List[Tuple[int, str, str]]:
+    """Fetch index HTML and return TOC items as tuples (id, title, url) in order."""
+    _prov = provider or ShamelaProvider()
+    index_html = _prov.fetch_index(book_url)
+    items = _prov.parse_toc(book_url, index_html)
+    return [(it.id, it.title, it.url) for it in items]
+
+
+def fetch_chapter(book_url: str, chapter_url: str, *, provider: Optional[Provider] = None) -> str:
+    _prov = provider or ShamelaProvider()
+    return _prov.fetch_chapter(chapter_url, referer=book_url)

@@ -10,7 +10,8 @@ from .parsers import ContentParser, parse_book_meta, parse_toc
 from .endnotes import extract_endnotes, link_endnote_refs, build_endnotes_xhtml
 from .cover import _parse_min_size, _maybe_convert_png_to_jpeg
 from .builder import strip_book_prefix
-from .api import build_epub_from_url
+from .api import build_epub_from_url, fetch_toc, fetch_chapter
+from .providers import Provider, ShamelaProvider
 from .exceptions import ShamelaError
 
 __all__ = [
@@ -25,5 +26,9 @@ __all__ = [
     "_maybe_convert_png_to_jpeg",
     "strip_book_prefix",
     "build_epub_from_url",
+    "fetch_toc",
+    "fetch_chapter",
+    "Provider",
+    "ShamelaProvider",
     "ShamelaError",
 ]

@@ -33,6 +33,8 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover
     ap.add_argument("--cover-convert-jpeg", action="store_true", help="Convert PNG cover to JPEG (requires Pillow)")
     ap.add_argument("--workers", type=int, default=2, help="Parallel workers (polite): 1–4 recommended")
     ap.add_argument("--jitter", type=float, default=0.3, help="Throttle jitter fraction (0..1)")
+    ap.add_argument("--profile", choices=["minimal", "kindle", "apple"], default="minimal", help="Sanitizer/semantics profile")
+    ap.add_argument("--no-cache", action="store_true", help="Disable local HTTP/image cache")
     args = ap.parse_args(argv)
 
     try:
@@ -53,6 +55,14 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover
                 cover_min_size = (w, h)
             except Exception:
                 cover_min_size = None
+        def on_event(ev: dict) -> None:
+            # Simple CLI progress feedback without polluting library API
+            t = ev.get("type")
+            if t == "chapter_fetch_start":
+                print(f"[ {ev.get('index'):03d} ] id={ev.get('id')} …", end="", flush=True)
+            elif t == "chapter_fetch_done":
+                print(" ok")
+
         build_epub_from_url(
             args.url,
             out_path,
@@ -66,6 +76,9 @@ def main(argv: Optional[List[str]] = None) -> int:  # pragma: no cover
             cover_query=args.cover_query,
             cover_min_size=cover_min_size,
             cover_min_bytes=max(0, int(args.cover_min_bytes)),
+            profile=args.profile,
+            use_cache=not args.no_cache,
+            on_event=on_event,
         )
         print("[✓] Done.")
         return 0

@@ -7,6 +7,7 @@ from urllib.parse import urlparse, quote_plus
 from urllib.request import Request, urlopen
 
 from .http import UA
+from . import cache as _cache
 
 
 def _maybe_convert_png_to_jpeg(data: bytes, mime: str) -> Tuple[bytes, str]:
@@ -37,12 +38,19 @@ def _parse_min_size(s: Optional[str]) -> Optional[Tuple[int, int]]:
     return w, h
 
 
-def _download_bytes(url: str) -> Optional[Tuple[bytes, str]]:
+def _download_bytes(url: str, *, kind: str = "images", use_cache: bool = True) -> Optional[Tuple[bytes, str]]:
+    if use_cache:
+        got = _cache.get_bytes(kind, url)
+        if got is not None:
+            data, ctype = got
+            return data, (ctype or "")
     try:
         req = Request(url, headers={"User-Agent": UA, "Referer": "https://www.google.com/"})
         with contextlib.closing(urlopen(req, timeout=30)) as resp:
             data = resp.read()
             ctype = resp.headers.get('Content-Type', '').split(';')[0].strip().lower()
+            if use_cache:
+                _cache.put_bytes(kind, url, data, ctype)
             return data, ctype
     except Exception:
         return None
@@ -157,4 +165,3 @@ def _image_urls_from_bing(query: str, max_n: int = 8) -> List[str]:
             if len(urls) >= max_n:
                 break
     return urls
-

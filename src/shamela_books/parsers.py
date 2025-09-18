@@ -133,7 +133,7 @@ def parse_toc(book_url: str, html_text: str) -> List[TocItem]:
 
 class ContentParser(HTMLParser):
     """Extract main content container: prefer div.nass; otherwise the largest text block.
-    Also strip scripts/styles/nav.
+    Also strip scripts/styles/nav. Allows a safe subset of tags, including tables/images.
     """
 
     def __init__(self):
@@ -173,13 +173,33 @@ class ContentParser(HTMLParser):
                 self.skip_depth += 1
                 return
             # Keep markup minimal for Apple Books strictness: drop source <span> wrappers and <a> links
-            allowed = {"p", "br", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub"}
+            allowed = {
+                "p", "br", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6",
+                "blockquote", "ul", "ol", "li", "sup", "sub",
+                # minimal tables and code/poetry blocks
+                "table", "thead", "tbody", "tr", "th", "td", "pre", "code",
+                # figures/images
+                "figure", "figcaption", "img", "hr",
+            }
+            void_tags = {"br", "hr", "img"}
             if tag in allowed:
+                if tag == "img":
+                    # Only keep safe subset of attributes for images (src, alt)
+                    keep = {}
+                    for k, v in attrs:
+                        if k in {"src", "alt", "id", "class"}:
+                            keep[k] = v
+                    attrs_str = "".join(f" {k}={xsu.quoteattr(v)}" for k, v in keep.items() if v)
+                    # XHTML self-closing for void element
+                    self.tmp_buf.write(f"<img{attrs_str} />")
+                    return
+                # Non-void elements
                 attrs_str = "".join(
                     f" {k}={xsu.quoteattr(v)}" for k, v in attrs if k in {"id", "class"}
                 )
                 self.tmp_buf.write(f"<{tag}{attrs_str}>")
-                self.emitted.append(tag)
+                if tag not in void_tags:
+                    self.emitted.append(tag)
 
     def handle_endtag(self, tag):
         if tag in {"script", "style"}:
@@ -190,7 +210,7 @@ class ContentParser(HTMLParser):
                 self.skip_depth -= 1
                 return
             # Enforce proper nesting: close any open tags until we reach 'tag'
-            if tag in {"p", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub"}:
+            if tag in {"p", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub", "table", "thead", "tbody", "tr", "th", "td", "pre", "code", "figure", "figcaption"}:
                 while self.emitted and self.emitted[-1] != tag:
                     self.tmp_buf.write(f"</{self.emitted.pop()}>")
                 if self.emitted and self.emitted[-1] == tag:

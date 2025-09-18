@@ -2,13 +2,14 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 
 [English](README.en.md) | [العربية](README.ar.md) | Русский
 
-Проект для выгрузки книг с сайта `shamela.ws` и сборки из них файлов EPUB с корректной поддержкой арабского письма (RTL) и удобной навигацией.
+Проект для выгрузки книг с сайта `shamela.ws` и сборки EPUB с поддержкой RTL, вложенного оглавления (h2/h3), встроенных картинок и глобальных сносок, совместимых с Kindle и Apple Books.
 
 ## TL;DR
- - Базово (с автопоиском обложки): `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
- - Отключить автопоиск обложки: исключите `--cover-auto` (по умолчанию авто включён)
- - Свой файл обложки: `--cover path/to.jpg|png`
-- Результат: `output/<Название книги> - <Издатель>.epub`
+ - Базово: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
+ - С обложкой: `--cover-auto` или `--cover path/to.jpg|png`
+ - Профили: `--profile minimal|kindle|apple`
+ - Без кэша: `--no-cache`
+ - Результат: `output/<Название книги> - <Издатель>.epub`
 
 ## Установка (опционально)
 - Локально: `pip install -e .`
@@ -23,6 +24,7 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 ## Быстрый старт
 - Python 3.11+: `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`
 - Через CLI: `shamela-to-epub 'https://shamela.ws/book/158' --throttle 0.6`
+- Профиль для Apple: `--profile apple`; для Kindle: `--profile kindle`
 - С обложкой: `--cover-auto` или `--cover path/to.jpg|png`
 - Результат: `output/<Название книги> - <Издатель>.epub`.
 
@@ -32,34 +34,42 @@ shamela_books — парсер книг и сборщик EPUB (RTL)
 - Совместимость с Apple Books (RU/EN): `docs/APPLE_BOOKS.ru.md`, `docs/APPLE_BOOKS.en.md`
 - Разработка/контрибуции (RU/EN): `docs/DEVELOPMENT.ru.md`, `docs/DEVELOPMENT.en.md`
 - Диагностика и FAQ (RU/EN): `docs/TROUBLESHOOTING.ru.md`, `docs/TROUBLESHOOTING.en.md`
+- Технические детали: `TECHNICAL.md`
 
 ## Использование как модуль
 ```python
-from shamela_books import build_epub_from_url
+from shamela_books import build_epub_from_url, fetch_toc, Provider, ShamelaProvider
+
+def on_event(ev: dict):
+    if ev.get('type') == 'chapter_fetch_start':
+        print('start', ev.get('index'), ev.get('id'))
 
 out = build_epub_from_url(
     'https://shamela.ws/book/158',
     throttle=0.8,
+    profile='apple',
     cover_auto=True,
-    cover_query='...',
     cover_min_size=(600, 800),
+    on_event=on_event,
 )
 print('EPUB at', out)
 ```
 
-## Поддерживаемый формат (один, «рабочий»)
-- EPUB (минимальный профиль, оптимален для Send‑to‑Kindle):
-  - Без обложки и страницы «بطاقة الكتاب».
-  - Без встроенных шрифтов.
-  - `nav.xhtml` присутствует в манифесте, но не включён в `spine`.
-  - Сноски: глобальная нумерация по всей книге; ссылки в тексте → `endnotes.xhtml#note-<G>`; в конце ↩︎ ведёт обратно в исходную главу `#ref-<G>`. Для Kindle исключено дублирование номера (номер списка `<ol>` используется как основной; явный префикс в тексте элемента не добавляется).
+## Профили и формат
+- Minimal (по умолчанию): чистый RTL XHTML, landmarks, вложенное оглавление (h2/h3), встроенные картинки, страница «الهوامش».
+- Kindle: как minimal, но санитайзер настроен под приемистость Send‑to‑Kindle.
+- Apple: более строгий санитайзер, явный `xmlns:epub` при использовании `epub:type`.
 
 ## Ключевые опции
-- `-o, --output` — путь к выходному файлу (по умолчанию берётся из названия книги + издатель).
-- `--throttle 0.6` — пауза между запросами (сек).
-- `--limit N` — ограничить число глав (для тестов).
- - `--cover-auto` — автопоиск обложки (включён по умолчанию). Если не удалось — файл собирается без обложки.
- - `--cover path/to.jpg|png` — задать локальную обложку вручную (рекомендуется ≥ 300×300).
+- `-o, --output` — путь к выходному файлу.
+- `--throttle <сек>` — пауза между запросами.
+- `--limit <N>` — ограничить число глав.
+- `--profile minimal|kindle|apple` — профиль санитайзера/семантики.
+- `--no-cache` — отключить локальный кэш (HTML/картинки/обложки).
+- Обложка:
+  - `--cover-auto` — автопоиск (Google/DuckDuckGo/Bing) с фильтрами размера/типа/аспекта.
+  - `--cover <file>` — локальный файл (JPEG/PNG), `--cover-min-size`, `--cover-min-bytes`, `--cover-convert-jpeg`.
+- Параллелизм: `--workers 1..4`, `--jitter 0..1`.
 
 ### Сводная таблица опций
 
@@ -68,26 +78,31 @@ print('EPUB at', out)
 | `-o, --output <path>` | Путь к выходному файлу | `output/<Название> - <Издатель>.epub` | `-o output/book.epub` |
 | `--throttle <sec>` | Пауза между HTTP‑запросами | `0.8` | `--throttle 0.6` |
 | `--limit <N>` | Скачивать только первые N глав (для теста) | все главы | `--limit 10` |
-| `--cover-auto` | Автопоиск обложки (Google Images + фильтры размера/типа) | выкл | `--cover-auto` |
+| `--profile <p>` | Профиль санитайзера | `minimal` | `--profile apple` |
+| `--no-cache` | Отключить кэш | выкл | `--no-cache` |
+| `--cover-auto` | Автопоиск обложки (Google/DuckDuckGo/Bing) | выкл | `--cover-auto` |
 | `--cover <file>` | Локальная обложка (JPEG/PNG, ≥ 300×300) | отсутствует | `--cover cover.jpg` |
+| `--workers <n>` | Потоки | `2` | `--workers 2` |
+| `--jitter <f>` | Джиттер задержки 0..1 | `0.3` | `--jitter 0.1` |
 
-## Обложка и «بطاقة الكتاب»
-- По умолчанию обложка не добавляется (для максимальной совместимости). При необходимости:
-  - `--cover-auto` — автопоиск обложки (Google Images). Логика и фильтры описаны в TECHNICAL.md.
-  - `--cover path/to.jpg|png` — вручную задать файл обложки (рекомендуется ≥ 300×300).
+## Обложка
+- Поиск: Google → DuckDuckGo → Bing (без JS). Фильтры по типу (JPEG/PNG), размеру и аспект‑ratio. Можно задать `--cover-query`.
+- Локальный файл: JPEG/PNG (рекомендуется ≥ 600×800 для обложки). `--cover-convert-jpeg` конвертирует PNG в JPEG.
 
 ## Сноски (الهوامش)
-- В тексте: отображаются глобальные номера `1..N` (латинские цифры), кликабельные на конец книги.
-- В конце: сформирован `endnotes.xhtml` со списком `<ol>`; удаляются повторные ведущие числа из исходного текста.
-- Обратная ссылка ↩︎ возвращает к месту в конкретной главе.
+- Распознавание: `(N)`, `[N]`, `<sup>…</sup>`, арабские цифры. Поддержка нескольких блоков `p.hamesh` в конце главы; дедуп по номеру.
+- Нумерация: глобальная по книге; ссылки из текста → `endnotes.xhtml#note-<G>`; ↩︎ ведёт назад на `#ref-<G>`.
+- Привязка к разделам: на странице «الهوامش» показывается ссылка на ближайший раздел `h2/h3` («— Название раздела»).
 
-## Что не работало и что работает
-- Работает стабильно: минимальный EPUB — без шрифтов, без обложки/«بطاقة الكتاب», `nav.xhtml` не в `spine`.
-- Не работало (через Send‑to‑Kindle для этой книги):
-  - EPUB с обложкой/«بطاقة الكتاب» и/или встроенными шрифтами — ошибка e999.
-  - Старые профили (с NCX/сложными метаданными) — нестабильно.
+## Что работает
+- Минимальный/Kindle/Apple профили, вложенное оглавление (h2/h3), встроенные изображения (JPEG/PNG), глобальные сноски с обратными ссылками.
 
-Подробнее о профиле и обложке: см. TECHNICAL.md.
+Подробнее о профилях, навигации и обложках: см. TECHNICAL.md.
+
+## Кэш
+- По умолчанию включён файловый кэш HTML и картинок в `.cache/shamela_books/`.
+- Можно переопределить каталог через переменную `SHAMELA_CACHE_DIR`.
+- Отключение: `--no-cache` в CLI или `use_cache=False` в API.
 
 ## Пример
 - `python -m shamela_books 'https://shamela.ws/book/158' --throttle 0.6`

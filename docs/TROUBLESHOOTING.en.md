@@ -11,11 +11,14 @@
 
 ## Kindle: e999 when uploading
 - Causes: embedded fonts, heavy covers, dedicated cover page, non‑minimal profiles.
-- Fix: minimal profile, no cover page, prefer JPEG, `nav.xhtml` in manifest but not in `spine`. If still e999, transfer via USB.
+- Fix: minimal/kindle profile, no cover page, prefer JPEG, `nav.xhtml` in manifest but not in `spine`. If still e999, transfer via USB.
 
 ## Cover not added
-- Might fail MIME/size/bytes checks or due to network.
-- Try `--cover <file>`; for PNG/HEIC add `--cover-convert-jpeg`.
+- Might fail MIME/size/bytes/aspect checks or due to network.
+- Try `--cover <file>` or adjust `--cover-query`; for PNG add `--cover-convert-jpeg`.
+
+## Stale/old content
+- Disable cache with `--no-cache` and re‑run, or remove `.cache/shamela_books/`.
 
 ## Network/Timeouts
 - Increase `--throttle` and reduce `--workers`.
@@ -24,4 +27,3 @@
 ## Endnote numbering
 - In text — always global `1..N` for consistency and reliable linking.
 - End page — `<ol>` renders the number; explicit `G.` prefix is omitted to avoid “G.G”.
-

@@ -109,6 +109,9 @@ def write_epub3(
     cover_asset: Optional[Tuple[str, bytes, str]] = None,
     endnotes_entries: Optional[List[Tuple[int, str]]] = None,
     endnote_gid_to_chapter_id: Optional[Dict[int, int]] = None,
+    inline_images: Optional[List[Tuple[str, bytes, str]]] = None,
+    subnav_by_chapter: Optional[Dict[int, List[Tuple[str, str]]]] = None,
+    endnote_gid_to_section_id: Optional[Dict[int, str]] = None,
 ):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -189,9 +192,22 @@ def write_epub3(
             f"    <item id=\"ch{idx}\" href=\"{xsu.escape(fname)}\" media-type=\"application/xhtml+xml\"/>"
         )
         spine_items.append(f"    <itemref idref=\"ch{idx}\"/>")
-        nav_points.append(
-            f"      <li><a href=\"{xsu.escape(fname)}\">{xsu.escape(ch.title)}</a></li>"
-        )
+        # Build nested nav with subitems if provided
+        children = (subnav_by_chapter or {}).get(ch.id, [])
+        if children:
+            child_li = []
+            for aid, atitle in children:
+                child_li.append(f"<li><a href=\"{xsu.escape(fname)}#{xsu.escape(aid)}\">{xsu.escape(atitle)}</a></li>")
+            nav_points.append(
+                "      <li>" +
+                f"<a href=\"{xsu.escape(fname)}\">{xsu.escape(ch.title)}</a>" +
+                "<ol>" + "".join(child_li) + "</ol>" +
+                "</li>"
+            )
+        else:
+            nav_points.append(
+                f"      <li><a href=\"{xsu.escape(fname)}\">{xsu.escape(ch.title)}</a></li>"
+            )
         text_files.append((fname, ch.xhtml.encode("utf-8")))
         chid_to_fname[ch.id] = fname.replace("text/", "")
 
@@ -208,6 +224,13 @@ def write_epub3(
         # Build endnotes XHTML with per-note backlinks to chapter filenames
         items_xml = []
         gid_to_ch = endnote_gid_to_chapter_id or {}
+        gid_to_sec = endnote_gid_to_section_id or {}
+        # Build map from chapter id -> anchor id -> title for lookup
+        sec_title: Dict[str, str] = {}
+        if subnav_by_chapter:
+            for ch_id, lst in subnav_by_chapter.items():
+                for aid, at in lst:
+                    sec_title[f"{ch_id}:{aid}"] = at
         import re as _re
         for gid, text in endnotes_entries:
             t = text
@@ -223,10 +246,21 @@ def write_epub3(
                 t = t2
             t = t.lstrip()
             t_xml = xsu.escape(t)
-            ch_file = chid_to_fname.get(gid_to_ch.get(gid, -1), "")
+            ch_id = gid_to_ch.get(gid, -1)
+            ch_file = chid_to_fname.get(ch_id, "")
             back_href = f"{ch_file}#ref-{gid}" if ch_file else f"#ref-{gid}"
+            # Optional section backlink
+            sec_id = gid_to_sec.get(gid)
+            sec_link = ""
+            if sec_id and ch_file:
+                key = f"{ch_id}:{sec_id}"
+                sec_t = sec_title.get(key, "")
+                if sec_t:
+                    sec_link = f" <span class=\"note-sec\">— <a href=\"{xsu.escape(ch_file)}#{xsu.escape(sec_id)}\">{xsu.escape(sec_t)}</a></span>"
+                else:
+                    sec_link = f" <span class=\"note-sec\">— <a href=\"{xsu.escape(ch_file)}#{xsu.escape(sec_id)}\">§</a></span>"
             items_xml.append(
-                f"<li id=\"note-{gid}\">{t_xml} <a href=\"{xsu.escape(back_href)}\">↩︎</a></li>"
+                f"<li id=\"note-{gid}\">{t_xml} <a href=\"{xsu.escape(back_href)}\">↩︎</a>{sec_link}</li>"
             )
         ol = "\n".join(items_xml)
         end_xhtml = (
@@ -247,13 +281,20 @@ def write_epub3(
         ) % (meta.language, meta.language, xsu.escape("الهوامش"), xsu.escape("الهوامش"), ol)
         text_files.append((end_fname, end_xhtml.encode("utf-8")))
 
+    # First chapter href for landmarks
+    first_href = f"text/0001_{make_slug(chapters_sorted[0].title)}.xhtml" if chapters_sorted else ""
     nav_xhtml = (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
         "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
         "<head><meta charset=\"utf-8\"/><title>الفهرس</title>\n"
         "<link rel=\"stylesheet\" type=\"text/css\" href=\"css/style.css\"/></head>\n"
-        "<body><nav epub:type=\"toc\"><h2>الفهرس</h2><ol>\n%s\n"
-        "</ol></nav></body></html>\n"
+        "<body>\n"
+        "<nav epub:type=\"toc\"><h2>الفهرس</h2><ol>\n%s\n"
+        "</ol></nav>\n"
+        "<nav epub:type=\"landmarks\"><h2>معالم</h2><ol>\n"
+        f"  <li><a href=\"{xsu.escape(first_href)}\" epub:type=\"bodymatter\">المتن</a></li>\n"
+        "</ol></nav>\n"
+        "</body></html>\n"
     ) % (meta.language, meta.language, "\n".join(nav_points))
 
     font_manifest_xml = [
@@ -330,3 +371,7 @@ def write_epub3(
         if cover_asset:
             cover_name, cover_bytes, _cover_mime = cover_asset
             zf.writestr(f"OEBPS/images/{cover_name}", cover_bytes)
+        # Embed inline images from chapters, if any
+        if inline_images:
+            for base, data, _mime in inline_images:
+                zf.writestr(f"OEBPS/images/{base}", data)
