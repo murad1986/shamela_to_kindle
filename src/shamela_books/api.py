@@ -3,8 +3,8 @@ from __future__ import annotations
 import html
 import os
 import re
-import threading
 from typing import Callable, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
 from .http import fetch, RateLimiter
 from .models import BookMeta, Chapter
@@ -90,6 +90,8 @@ def build_epub_from_url(
     if not toc:
         raise ShamelaError("TOC parsing returned no chapters.")
     total = len(toc) if limit is None else min(len(toc), limit)
+    book_id = extract_book_id(book_url)
+    base_book_url = re.sub(r"/+$", "", book_url)
 
     limiter = RateLimiter(throttle, jitter=jitter)
 
@@ -104,28 +106,90 @@ def build_epub_from_url(
 
     fetched: dict[int, _ChapterRaw] = {}
 
-    def worker(idx_item):
-        idx, it = idx_item
-        _emit(on_event, BuildEvent(type="chapter_fetch_start", index=idx, id=it.id))
-        limiter.wait()
-        html_text = _prov.fetch_chapter(it.url, referer=book_url, use_cache=use_cache)
-        title = extract_title_from_page(html_text) or it.title
-        cp = ContentParser(); cp.feed(html_text)
-        body_html = cp.get_content()
-        if not body_html:
-            cleaned = re.sub(r"<div[^>]*class=\"s-nav\"[\s\S]*?</div>", "", html_text)
-            m = re.search(r'<div[^>]*class="nass[^"]*"[^>]*>([\s\S]*?)</div>', cleaned)
-            body_html = m.group(1) if m else ""
-            body_html = html.unescape(body_html)
-        body_wo, notes = extract_endnotes(body_html)
-        if not body_wo or len(body_wo) < 10:
-            # Fallback sanitizer for Apple Books strictness
-            body_wo = sanitize_fragment(body_html, profile=profile)
-            body_wo, notes = extract_endnotes(body_wo)
-        _emit(on_event, BuildEvent(type="chapter_fetch_done", index=idx, id=it.id))
-        return (idx, _ChapterRaw(it.id, it.order + 2, title, body_wo, notes))
+    next_link_re = re.compile(r'<a[^>]+href="([^"]+)"[^>]*>\s*&nbsp;&gt;&nbsp;\s*</a>', re.I)
+    page_id_re = re.compile(rf"/book/{book_id}/(\d+)")
 
-    items = list(enumerate(toc[:total], start=1))
+    def _extract_body_fragment(html_text: str) -> str:
+        cp = ContentParser()
+        cp.feed(html_text)
+        body_html = cp.get_content()
+        if body_html:
+            return body_html
+        cleaned = re.sub(r"<div[^>]*class=\"s-nav\"[\s\S]*?</div>", "", html_text)
+        m = re.search(r'<div[^>]*class="nass[^"]*"[^>]*>([\s\S]*?)</div>', cleaned)
+        fallback = m.group(1) if m else ""
+        return html.unescape(fallback)
+
+    def _next_page_id(html_text: str) -> Optional[int]:
+        m = next_link_re.search(html_text)
+        if not m:
+            return None
+        href = html.unescape(m.group(1) or "").strip()
+        if not href:
+            return None
+        mid = page_id_re.search(href)
+        if not mid:
+            return None
+        try:
+            return int(mid.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    next_lookup: Dict[int, Optional[int]] = {}
+    for pos, item in enumerate(toc):
+        nxt = toc[pos + 1].id if pos + 1 < len(toc) else None
+        next_lookup[item.id] = nxt
+
+    toc_slice = toc[:total]
+    seq = []
+    for idx, item in enumerate(toc_slice, start=1):
+        next_id = next_lookup.get(item.id)
+        seq.append((idx, (item, next_id)))
+
+    def _page_url(pid: int) -> str:
+        return urljoin(base_book_url + "/", str(pid))
+
+    def worker(idx_item):
+        idx, (it, next_chapter_id) = idx_item
+        _emit(on_event, BuildEvent(type="chapter_fetch_start", index=idx, id=it.id))
+        current_id = it.id
+        current_url = it.url
+        seen_ids: set[int] = set()
+        fragments: List[str] = []
+        title: Optional[str] = None
+        guard = 0
+        while True:
+            if current_id in seen_ids:
+                break
+            seen_ids.add(current_id)
+            limiter.wait()
+            html_text = _prov.fetch_chapter(current_url, referer=book_url, use_cache=use_cache)
+            if title is None:
+                title = extract_title_from_page(html_text) or it.title
+            fragment = _extract_body_fragment(html_text)
+            if fragment:
+                fragments.append(fragment)
+            guard += 1
+            if guard > 6000:
+                break
+            next_pid = _next_page_id(html_text)
+            if not next_pid:
+                break
+            if next_chapter_id is not None and next_pid >= next_chapter_id:
+                break
+            if next_pid in seen_ids:
+                break
+            current_id = next_pid
+            current_url = _page_url(next_pid)
+        combined_html = "".join(fragments)
+        body_wo, notes = extract_endnotes(combined_html)
+        if not body_wo or len(body_wo) < 10:
+            sanitized = sanitize_fragment(combined_html, profile=profile)
+            body_wo, notes = extract_endnotes(sanitized)
+        _emit(on_event, BuildEvent(type="chapter_fetch_done", index=idx, id=it.id))
+        return (idx, _ChapterRaw(it.id, it.order + 2, title or it.title, body_wo, notes))
+
+    items = seq
     if workers <= 1:
         for idx_item in items:
             idx, raw = worker(idx_item)
