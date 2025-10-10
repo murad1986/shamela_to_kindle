@@ -4,7 +4,6 @@ import os
 import re
 import xml.sax.saxutils as xsu
 import zipfile
-from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict
 
 from .models import BookMeta, Chapter
@@ -114,7 +113,6 @@ def write_epub3(
     endnote_gid_to_section_id: Optional[Dict[int, str]] = None,
 ):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     book_id = meta.identifier
 
     mimetype = b"application/epub+zip"
@@ -175,39 +173,36 @@ def write_epub3(
 
     manifest_items = []
     spine_items = []
-    nav_points = []
+    toc_entries: List[Dict[str, object]] = []
 
     # Sort chapters by their order to stabilize filenames
     chapters_sorted = sorted(chapters, key=lambda c: c.order)
 
     text_files: List[Tuple[str, bytes]] = []
-    if not minimal_profile:
-        spine_items = ["    <itemref idref=\"nav\"/>"]
-
     chid_to_fname: Dict[int, str] = {}
 
     for idx, ch in enumerate(chapters_sorted, 1):
-        fname = f"text/{idx:04d}_{make_slug(ch.title)}.xhtml"
+        fname = f"text/{idx:04d}.xhtml"
         manifest_items.append(
             f"    <item id=\"ch{idx}\" href=\"{xsu.escape(fname)}\" media-type=\"application/xhtml+xml\"/>"
         )
         spine_items.append(f"    <itemref idref=\"ch{idx}\"/>")
-        # Build nested nav with subitems if provided
         children = (subnav_by_chapter or {}).get(ch.id, [])
-        if children:
-            child_li = []
-            for aid, atitle in children:
-                child_li.append(f"<li><a href=\"{xsu.escape(fname)}#{xsu.escape(aid)}\">{xsu.escape(atitle)}</a></li>")
-            nav_points.append(
-                "      <li>" +
-                f"<a href=\"{xsu.escape(fname)}\">{xsu.escape(ch.title)}</a>" +
-                "<ol>" + "".join(child_li) + "</ol>" +
-                "</li>"
-            )
-        else:
-            nav_points.append(
-                f"      <li><a href=\"{xsu.escape(fname)}\">{xsu.escape(ch.title)}</a></li>"
-            )
+        child_entries = [
+            {
+                "title": atitle,
+                "href": f"{fname}#{aid}",
+                "children": [],
+            }
+            for aid, atitle in children
+        ]
+        toc_entries.append(
+            {
+                "title": ch.title,
+                "href": fname,
+                "children": child_entries,
+            }
+        )
         text_files.append((fname, ch.xhtml.encode("utf-8")))
         chid_to_fname[ch.id] = fname.replace("text/", "")
 
@@ -218,9 +213,6 @@ def write_epub3(
             f"    <item id=\"endnotes\" href=\"{xsu.escape(end_fname)}\" media-type=\"application/xhtml+xml\"/>"
         )
         spine_items.append("    <itemref idref=\"endnotes\"/>")
-        nav_points.append(
-            f"      <li><a href=\"{xsu.escape(end_fname)}\">الهوامش</a></li>"
-        )
         # Build endnotes XHTML with per-note backlinks to chapter filenames
         items_xml = []
         gid_to_ch = endnote_gid_to_chapter_id or {}
@@ -280,22 +272,13 @@ def write_epub3(
             "</html>\n"
         ) % (meta.language, meta.language, xsu.escape("الهوامش"), xsu.escape("الهوامش"), ol)
         text_files.append((end_fname, end_xhtml.encode("utf-8")))
-
-    # First chapter href for landmarks
-    first_href = f"text/0001_{make_slug(chapters_sorted[0].title)}.xhtml" if chapters_sorted else ""
-    nav_xhtml = (
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"%s\" lang=\"%s\" dir=\"rtl\">\n"
-        "<head><meta charset=\"utf-8\"/><title>الفهرس</title>\n"
-        "<link rel=\"stylesheet\" type=\"text/css\" href=\"css/style.css\"/></head>\n"
-        "<body>\n"
-        "<nav epub:type=\"toc\"><h2>الفهرس</h2><ol>\n%s\n"
-        "</ol></nav>\n"
-        "<nav epub:type=\"landmarks\"><h2>معالم</h2><ol>\n"
-        f"  <li><a href=\"{xsu.escape(first_href)}\" epub:type=\"bodymatter\">المتن</a></li>\n"
-        "</ol></nav>\n"
-        "</body></html>\n"
-    ) % (meta.language, meta.language, "\n".join(nav_points))
+        toc_entries.append(
+            {
+                "title": "الهوامش",
+                "href": end_fname,
+                "children": [],
+            }
+        )
 
     font_manifest_xml = [
         f"    <item id=\"font_{xsu.escape(base)}\" href=\"fonts/{xsu.escape(base)}\" media-type=\"{xsu.escape(_mime)}\"/>"
@@ -323,37 +306,96 @@ def write_epub3(
 
     content_opf = (
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-        "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"book-id\" xml:lang=\"%s\">\n"
-        "  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\">\n"
+        "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\" unique-identifier=\"book-id\">\n"
+        "  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:opf=\"http://www.idpf.org/2007/opf\">\n"
         "    <dc:identifier id=\"book-id\">%s</dc:identifier>\n"
         "    <dc:title>%s</dc:title>\n"
         "    <dc:language>%s</dc:language>\n"
-        f"    {dc_publisher}"
+        f"{dc_publisher}"
         f"    {dc_creator}\n"
         f"{meta_cover_hint}"
-        "    <meta property=\"dcterms:modified\">%s</meta>\n"
         "  </metadata>\n"
         "  <manifest>\n"
-        "    <item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n"
+        "    <item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>\n"
         "    <item id=\"css\" href=\"css/style.css\" media-type=\"text/css\"/>\n"
         "%s\n"
         "%s\n"
         "%s\n"
         "  </manifest>\n"
-        "  <spine page-progression-direction=\"rtl\">\n"
+        "  <spine toc=\"ncx\" page-progression-direction=\"rtl\">\n"
         "%s\n"
         "  </spine>\n"
         "</package>\n"
     ) % (
-        xsu.escape(meta.language),
         xsu.escape(book_id),
         dc_title,
         xsu.escape(meta.language),
-        now,
         "\n".join(font_manifest_xml),
         "\n".join(cover_manifest_xml),
         "\n".join(manifest_items),
         "\n".join(spine_items),
+    )
+
+    if not toc_entries and chapters_sorted:
+        first_fname = f"text/{1:04d}.xhtml"
+        toc_entries.append(
+            {
+                "title": chapters_sorted[0].title,
+                "href": first_fname,
+                "children": [],
+            }
+        )
+
+    nav_counter = [1]
+
+    def build_navpoint(entry: Dict[str, object], depth: int = 1) -> List[str]:
+        idx = nav_counter[0]
+        nav_counter[0] += 1
+        indent = "  " * depth
+        title = xsu.escape(str(entry.get("title", "")))
+        href = xsu.escape(str(entry.get("href", "")))
+        lines = [
+            f"{indent}<navPoint id=\"navPoint-{idx}\" playOrder=\"{idx}\">",
+            f"{indent}  <navLabel><text>{title}</text></navLabel>",
+            f"{indent}  <content src=\"{href}\"/>",
+        ]
+        for child in entry.get("children", []) or []:
+            if isinstance(child, dict):
+                lines.extend(build_navpoint(child, depth + 1))
+        lines.append(f"{indent}</navPoint>")
+        return lines
+
+    navmap_lines: List[str] = []
+    for entry in toc_entries:
+        navmap_lines.extend(build_navpoint(entry, 1))
+
+    if not navmap_lines:
+        navmap_lines.append(
+            '    <navPoint id="navPoint-1" playOrder="1"><navLabel><text>المتن</text></navLabel><content src="text/0001.xhtml"/></navPoint>'
+        )
+
+    nav_depth = "2" if any((entry.get("children") for entry in toc_entries)) else "1"
+    doc_title_text = xsu.escape(meta.book_title or meta.title or "كتاب")
+
+    toc_ncx = (
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n"
+        "  <head>\n"
+        "    <meta name=\"dtb:uid\" content=\"%s\"/>\n"
+        "    <meta name=\"dtb:depth\" content=\"%s\"/>\n"
+        "    <meta name=\"dtb:totalPageCount\" content=\"0\"/>\n"
+        "    <meta name=\"dtb:maxPageNumber\" content=\"0\"/>\n"
+        "  </head>\n"
+        "  <docTitle><text>%s</text></docTitle>\n"
+        "  <navMap>\n"
+        "%s\n"
+        "  </navMap>\n"
+        "</ncx>\n"
+    ) % (
+        xsu.escape(book_id),
+        nav_depth,
+        doc_title_text,
+        "\n".join(navmap_lines),
     )
 
     with zipfile.ZipFile(out_path, "w") as zf:
@@ -362,7 +404,7 @@ def write_epub3(
         zf.writestr(zi, mimetype)
         zf.writestr("META-INF/container.xml", container_xml)
         zf.writestr("OEBPS/css/style.css", css)
-        zf.writestr("OEBPS/nav.xhtml", nav_xhtml.encode("utf-8"))
+        zf.writestr("OEBPS/toc.ncx", toc_ncx.encode("utf-8"))
         zf.writestr("OEBPS/content.opf", content_opf.encode("utf-8"))
         for fname, data in text_files:
             zf.writestr(f"OEBPS/{fname}", data)

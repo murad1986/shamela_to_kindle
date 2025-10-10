@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import xml.etree.ElementTree as ET
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -94,6 +95,7 @@ def build_epub_from_url(
     base_book_url = re.sub(r"/+$", "", book_url)
 
     limiter = RateLimiter(throttle, jitter=jitter)
+    max_chunk_bytes = 90_000
 
     class _ChapterRaw:
         __slots__ = ("id", "order", "title", "body_wo", "notes")
@@ -134,6 +136,53 @@ def build_epub_from_url(
             return int(mid.group(1))
         except (TypeError, ValueError):
             return None
+
+    def _chunk_body(html_text: str, max_bytes: int) -> List[str]:
+        if not html_text:
+            return []
+        if max_bytes <= 0:
+            return [html_text]
+        wrapper = f"<div>{html_text}</div>"
+        try:
+            root = ET.fromstring(wrapper)
+        except ET.ParseError:
+            return [html_text]
+
+        chunks: List[str] = []
+        current: List[str] = []
+        current_size = 0
+
+        def flush() -> None:
+            nonlocal current, current_size
+            if current:
+                chunks.append("".join(current))
+                current = []
+                current_size = 0
+
+        def add_fragment(fragment: str) -> None:
+            nonlocal current_size
+            if not fragment:
+                return
+            fragment_bytes = len(fragment.encode("utf-8"))
+            if current and current_size + fragment_bytes > max_bytes:
+                flush()
+            if fragment_bytes > max_bytes and not current:
+                chunks.append(fragment)
+                return
+            current.append(fragment)
+            current_size += fragment_bytes
+
+        if root.text and root.text.strip():
+            add_fragment(f"<p>{html.escape(root.text.strip())}</p>")
+
+        for child in root:
+            frag = ET.tostring(child, encoding="unicode")
+            add_fragment(frag)
+            if child.tail and child.tail.strip():
+                add_fragment(f"<p>{html.escape(child.tail.strip())}</p>")
+
+        flush()
+        return chunks or [html_text]
 
     next_lookup: Dict[int, Optional[int]] = {}
     for pos, item in enumerate(toc):
@@ -364,9 +413,9 @@ def build_epub_from_url(
         linked_body, sub = _add_ids_to_headings(linked_body)
         # Map each gid to nearest preceding section (h2/h3) within this chapter
         if local_map:
-            # Build list of headings in document order
             heads = [(m.start(), m.group(1)) for m in re.finditer(r"<(?:h2|h3)\b[^>]*id=\"([^\"]+)\"[^>]*>", linked_body, flags=re.I)]
             heads.sort()
+
             def nearest_section(pos: int) -> Optional[str]:
                 cur = None
                 for hp, hid in heads:
@@ -375,16 +424,30 @@ def build_epub_from_url(
                     else:
                         break
                 return cur
-            # Find positions of ref anchors and map to section id
+
             for mref in re.finditer(r"id=\"ref-(\d+)\"", linked_body):
                 gid = int(mref.group(1))
                 sec = nearest_section(mref.start())
                 if sec:
                     gid_to_section_id[gid] = sec
-        if sub:
-            subnav_by_chapter[raw.id] = sub
-        xhtml = build_chapter_xhtml_min(raw.title, linked_body)
-        chapters.append(Chapter(id=raw.id, order=raw.order, title=raw.title, xhtml=xhtml))
+
+        chunk_bodies = _chunk_body(linked_body, max_chunk_bytes) or [linked_body]
+        for chunk_idx, chunk_html in enumerate(chunk_bodies, start=1):
+            if chunk_idx == 1:
+                ch_id = raw.id
+                ch_title = raw.title
+                if sub:
+                    subnav_by_chapter[ch_id] = sub
+            else:
+                ch_id = raw.id * 1000 + chunk_idx
+                ch_title = f"{raw.title} (متابعة {chunk_idx})"
+            ch_order = raw.order * 100 + (chunk_idx - 1)
+            if local_map:
+                for mref in re.finditer(r"id=\"ref-(\d+)\"", chunk_html):
+                    gid = int(mref.group(1))
+                    gid_to_chapter_id[gid] = ch_id
+            xhtml = build_chapter_xhtml_min(ch_title, chunk_html)
+            chapters.append(Chapter(id=ch_id, order=ch_order, title=ch_title, xhtml=xhtml))
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     write_epub3(
