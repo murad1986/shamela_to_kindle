@@ -147,6 +147,7 @@ class ContentParser(HTMLParser):
         self.tmp_buf = io.StringIO()
         self.skip_depth = 0
         self.emitted: List[str] = []  # track emitted start tags to enforce proper closing
+        self.parts: List[str] = []  # accumulate ordered content blocks
 
     def handle_starttag(self, tag, attrs):
         attrs_d = dict(attrs)
@@ -172,10 +173,10 @@ class ContentParser(HTMLParser):
             if self.skip_depth > 0 or is_icon or is_button:
                 self.skip_depth += 1
                 return
-            # Keep markup minimal for Apple Books strictness: drop source <span> wrappers and <a> links
+            # Keep markup minimal for Apple Books strictness: drop source <span> wrappers while keeping anchors
             allowed = {
                 "p", "br", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6",
-                "blockquote", "ul", "ol", "li", "sup", "sub",
+                "blockquote", "ul", "ol", "li", "sup", "sub", "a",
                 # minimal tables and code/poetry blocks
                 "table", "thead", "tbody", "tr", "th", "td", "pre", "code",
                 # figures/images
@@ -194,8 +195,11 @@ class ContentParser(HTMLParser):
                     self.tmp_buf.write(f"<img{attrs_str} />")
                     return
                 # Non-void elements
+                allowed_attrs = {"id", "class"}
+                if tag == "a":
+                    allowed_attrs |= {"href", "name"}
                 attrs_str = "".join(
-                    f" {k}={xsu.quoteattr(v)}" for k, v in attrs if k in {"id", "class"}
+                    f" {k}={xsu.quoteattr(v)}" for k, v in attrs if k in allowed_attrs
                 )
                 self.tmp_buf.write(f"<{tag}{attrs_str}>")
                 if tag not in void_tags:
@@ -208,9 +212,10 @@ class ContentParser(HTMLParser):
         if self.capture:
             if self.skip_depth > 0:
                 self.skip_depth -= 1
+                self.depth_capture = max(0, self.depth_capture - 1)
                 return
             # Enforce proper nesting: close any open tags until we reach 'tag'
-            if tag in {"p", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub", "table", "thead", "tbody", "tr", "th", "td", "pre", "code", "figure", "figcaption"}:
+            if tag in {"p", "strong", "em", "b", "i", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "ul", "ol", "li", "sup", "sub", "a", "table", "thead", "tbody", "tr", "th", "td", "pre", "code", "figure", "figcaption"}:
                 while self.emitted and self.emitted[-1] != tag:
                     self.tmp_buf.write(f"</{self.emitted.pop()}>")
                 if self.emitted and self.emitted[-1] == tag:
@@ -223,6 +228,8 @@ class ContentParser(HTMLParser):
                 while self.emitted:
                     self.tmp_buf.write(f"</{self.emitted.pop()}>")
                 html_part = self.tmp_buf.getvalue()
+                if html_part.strip():
+                    self.parts.append(html_part)
                 L = len(re.sub(r"\s+", " ", html_part))
                 if L > self.best_len:
                     self.best_len = L
@@ -236,6 +243,8 @@ class ContentParser(HTMLParser):
             self.tmp_buf.write(xsu.escape(data))
 
     def get_content(self) -> str:
+        if self.parts:
+            return "".join(self.parts).strip()
         return self.best_html.strip()
 
 

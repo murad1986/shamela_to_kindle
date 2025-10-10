@@ -15,6 +15,7 @@ _RE_NUM_LINE_SEP = re.compile(r"^\s*([0-9\u0660-\u0669]+)\s*[\.\-–—:\)]\s*(.
 _RE_TAGS = re.compile(r"<[^>]+>")
 _RE_REF_PAREN = re.compile(r"\(\s*([0-9\u0660-\u0669]+)\s*\)")
 _RE_REF_BRACK = re.compile(r"\[\s*([0-9\u0660-\u0669]+)\s*\]")
+_RE_ALPHA_MARKER = re.compile(r"^\(\s*([^\d\u0660-\u0669]+)\s*\)")
 
 
 def extract_endnotes(body_html: str) -> tuple[str, list[tuple[str, str]]]:
@@ -53,6 +54,10 @@ def extract_endnotes(body_html: str) -> tuple[str, list[tuple[str, str]]]:
                 txt = mm.group(2).strip()
                 current_num = num_ascii
                 current_text_parts = [txt]
+            elif _RE_ALPHA_MARKER.match(line):
+                flush()
+                # Drop alphabetic side-comments like (ت) entirely
+                continue
             else:
                 if current_num is not None:
                     current_text_parts.append(line)

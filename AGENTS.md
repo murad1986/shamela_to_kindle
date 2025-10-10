@@ -1,5 +1,19 @@
 # Repository Guidelines
 
+## Codex Handoff Snapshot
+- **Purpose**: `shamela_books` converts Shamela.ws books into RTL EPUBs optimized for Kindle/Apple readers via a library-first architecture exposing `build_epub_from_url`.
+- **Key Entry Points**: Public API lives in `src/shamela_books/__init__.py`; CLI runs through `python -m shamela_books` delegating to `cli.main`.
+- **Core Modules**:
+  - `api.py` orchestrates fetching, parsing, sanitizing, cover selection, and EPUB assembly.
+  - `builder.py` creates chapter XHTML, packages EPUB3, and normalizes filenames.
+  - `parsers.py` extracts metadata, TOC, and cleans chapter HTML; `endnotes.py` handles حاشية footnotes.
+  - `http.py` + `cache.py` provide polite downloading with caching; `cover.py` manages cover sourcing.
+- **Data & Fixtures**: Sample HTML lives under `tests/fixtures/` for deterministic parsing/endnote tests; generated EPUBs land in `output/` (gitignored).
+- **Setup**: `python3.11 -m venv .venv && source .venv/bin/activate`, then `pip install -e .[dev]` (or run `scripts/dev_setup.sh` which performs the same bootstrap inside the repo).
+- **Validation**: Run `pytest -q`; linters available via `ruff check src tests` and `black src tests`. Optional type check `mypy src`.
+- **Operational Notes**: Default build throttles HTTP via `RateLimiter`; `build_epub_from_url` accepts callbacks for progress and supports caching toggles (`use_cache=False`) and profile-specific sanitizing (`minimal|kindle|apple`).
+- **Коммуникация**: Всегда отвечать пользователю на русском языке, независимо от языка запроса.
+
 ## Project Structure & Module Organization
 - Prefer a library-first layout with small CLIs.
 - Suggested structure:

@@ -3,6 +3,8 @@
 
 # Python
 __pycache__/
+.venv/
+*.egg-info/
 
 # Local caches and artifacts
 .cache/
